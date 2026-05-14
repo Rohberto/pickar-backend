@@ -3,8 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
-const connectDB = require('./config/db');
-const initSocket = require('./socket');
+const connectDB = require('./src/config/db');
+const initSocket = require('./src/socket');
 
 const app = express();
 const server = http.createServer(app);
@@ -55,15 +55,15 @@ app.use('/uploads', express.static('uploads'));
 app.use('/api/wallet/webhook', express.raw({ type: 'application/json' }));
 
 // ── Routes ────────────────────────────────────────────────────────
-app.use('/api/auth',       require('./routes/auth'));
-app.use('/api/deliveries', require('./routes/delivery'));
-app.use('/api/drivers',    require('./routes/driver'));
-app.use('/api/wallet',     require('./routes/wallet'));
-app.use('/api/users', require('./routes/user'));
-app.use('/api/wallet', require('./routes/wallet'));
+app.use('/api/auth',       require('./src/routes/auth'));
+app.use('/api/deliveries', require('./src/routes/delivery'));
+app.use('/api/drivers',    require('./src/routes/driver'));
+app.use('/api/wallet',     require('./src/routes/wallet'));
+app.use('/api/users', require('./src/routes/user'));
+app.use('/api/wallet', require('./src/routes/wallet'));
 // src/app.js
-app.use('/api/chat', require('./routes/chat'));
-app.post('/api/webhook/paystack', express.raw({ type: '*/*' }), require('./controllers/walletController').paystackWebhook);
+app.use('/api/chat', require('./src/routes/chat'));
+app.post('/api/webhook/paystack', express.raw({ type: '*/*' }), require('./src/controllers/walletController').paystackWebhook);
 
 // ── Health check ──────────────────────────────────────────────────
 app.get('/', (req, res) => {
