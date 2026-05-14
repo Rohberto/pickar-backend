@@ -1,4 +1,5 @@
 const Driver = require('../models/driver');
+const Delivery = require('../models/Delivery');
 
 // POST /api/drivers/online
 exports.goOnline = async (req, res) => {
@@ -79,6 +80,67 @@ exports.getDriverProfile = async (req, res) => {
   try {
     const driver = await Driver.findOne({ user: req.user._id });
     if (!driver) return res.status(404).json({ success: false, message: 'Driver profile not found' });
+    res.json({ success: true, data: driver });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+//get active trips 
+exports.getActiveTrip = async (req, res) => {
+  try {
+    const driver = await Driver.findOne({ user: req.user._id });
+    if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+    const Delivery = require('../models/Delivery');
+    const delivery = await Delivery.findOne({
+      driver: driver._id,
+      status: { $in: ['driver_assigned', 'driver_arrived', 'in_transit'] },
+    }).populate('user', 'fullName phone photo');
+
+    res.json({ success: true, data: delivery ?? null });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getActiveTrips = async (req, res) => {
+  try {
+    const driver = await Driver.findOne({ user: req.user._id });
+    if (!driver) return res.status(404).json({ success: false });
+
+    // Return ALL active deliveries sorted oldest first
+    // (oldest = process first)
+    const deliveries = await Delivery.find({
+      driver: driver._id,
+      status: { $in: ['driver_assigned', 'driver_arrived', 'in_transit'] },
+    })
+      .sort({ createdAt: 1 })
+      .populate('user', 'fullName phone');
+
+    res.json({ success: true, data: deliveries });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PATCH /api/drivers/me
+exports.updateMe = async (req, res) => {
+  try {
+    const allowed = ['name', 'phone', 'photo', 'vehicle'];
+    const updates = {};
+    allowed.forEach(field => {
+      if (req.body[field] !== undefined) updates[field] = req.body[field];
+    });
+
+    const driver = await Driver.findOneAndUpdate(
+      { user: req.user._id },
+      updates,
+      { new: true, runValidators: true }
+    );
+
+    if (!driver) return res.status(404).json({ success: false, message: 'Driver profile not found' });
+
     res.json({ success: true, data: driver });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

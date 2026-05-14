@@ -58,19 +58,32 @@ const deliverySchema = new mongoose.Schema(
       default: false,
     },
 
-    status: {
-      type: String,
-      enum: [
-        'pending',          // just created, ride not selected yet
-        'finding_driver',   // pickup confirmed, searching for driver
-        'driver_assigned',  // driver accepted the trip
-        'picked_up',        // driver has the package
-        'in_transit',       // on the way to recipient
-        'delivered',        // successfully delivered
-        'cancelled',        // cancelled by user
-      ],
-      default: 'pending',
-    },
+ status: {
+  type: String,
+  enum: [
+    'pending',
+    'finding_driver',
+    'driver_assigned',
+    'driver_arrived',  // ← add this
+    'picked_up',
+    'in_transit',
+    'delivered',
+    'cancelled',
+  ],
+  default: 'pending',
+},
+
+// 4-digit code user shows driver at pickup
+pickupCode: {
+  type: String,
+  default: null,
+},
+
+// 4-digit code recipient shows driver at drop-off
+deliveryCode: {
+  type: String,
+  default: null,
+},
 
     driver: {
       type: mongoose.Schema.Types.ObjectId,

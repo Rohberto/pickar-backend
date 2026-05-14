@@ -19,6 +19,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Please provide your phone number'],
     },
+    photo: {
+  type: String,
+  default: null,
+},
     password: {
       type: String,
       required: [true, 'Please provide a password'],
@@ -42,6 +46,7 @@ const userSchema = new mongoose.Schema(
       type: Date,
       select: false,
     },
+    pushToken: { type: String, default: null },
     // Driver specific
     idDocument: String,
     proofOfAddress: String,

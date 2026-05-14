@@ -1,6 +1,7 @@
 const Delivery = require('../models/Delivery');
 const { matchDriver } = require('../services/matchingService');
 const { debitWallet } = require('../services/walletService');
+const { releaseEscrowToDriver, refundEscrow } = require('../services/walletService');
 
 // Pricing config per ride type (can move to DB later)
 const RIDE_TYPES = [
@@ -153,21 +154,22 @@ exports.selectRide = async (req, res) => {
 // Frontend polls this while on the "Connecting to a Driver" screen
 exports.getDeliveryStatus = async (req, res) => {
   try {
-    const delivery = await Delivery.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-    }).populate('driver', 'name phone vehicle rating location');
+    const delivery = await Delivery.findById(req.params.id)
+      .populate('driver', 'name phone vehicle rating location photo')
+      .populate('user', 'name phone photo');
+
+    console.log(`[getDeliveryStatus] ID: ${req.params.id} | Found: ${!!delivery} | Requester: ${req.user?._id}`);
 
     if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        message: 'Delivery not found',
-      });
+      return res.status(404).json({ success: false, message: 'Delivery not found' });
     }
 
+    // TEMPORARY - Allow both user and driver
     res.status(200).json({ success: true, data: delivery });
+
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 };
 
@@ -195,36 +197,33 @@ exports.getDeliveryHistory = async (req, res) => {
 // POST /api/deliveries/:id/cancel
 exports.cancelDelivery = async (req, res) => {
   try {
-    const delivery = await Delivery.findOneAndUpdate(
-      {
-        _id: req.params.id,
-        user: req.user._id,
-        // Can only cancel before a driver is assigned
-        status: { $in: ['pending', 'finding_driver'] },
-      },
-      {
-        status: 'cancelled',
-        'timeline.cancelledAt': new Date(),
-      },
+    // Remove the status restriction — allow cancel from any active state
+    const delivery = await Delivery.findByIdAndUpdate(
+      req.params.id,
+      { status: 'cancelled' },
       { new: true }
     );
+await refundEscrow({ userId: delivery.user, amount: delivery.price, deliveryId: delivery._id });
+    if (!delivery) return res.status(404).json({ success: false });
 
-    if (!delivery) {
-      return res.status(400).json({
-        success: false,
-        message: 'Delivery not found or cannot be cancelled at this stage',
+    const io = req.app.get('io');
+
+    if (delivery.driver) {
+      const Driver = require('../models/driver');
+      await Driver.findByIdAndUpdate(delivery.driver, { status: 'online' });
+      io.to(`driver_${delivery.driver}`).emit('trip_cancelled', {
+        deliveryId: delivery._id,
+        message: 'The user has cancelled this trip.',
       });
     }
 
-    res.status(200).json({
-      success: true,
-      message: 'Delivery cancelled successfully',
-      data: delivery,
-    });
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+
 exports.confirmPickup = async (req, res) => {
   try {
     const delivery = await Delivery.findOne({
@@ -268,9 +267,183 @@ exports.confirmPickup = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Finding a driver for you...',
+      message: 'Searching for a driver for you...',
       data: delivery,
     });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+// POST /api/deliveries/:id/driver-arrived
+exports.driverArrived = async (req, res) => {
+  try {
+    const delivery = await Delivery.findByIdAndUpdate(
+      req.params.id,
+      { status: 'driver_arrived' },
+      { new: true }
+    );
+    console.log(`[driverArrived] Updated delivery status to driver_arrived for delivery ${req.params.id}`);
+    if (!delivery) return res.status(404).json({ success: false, message: 'Delivery not found' });
+ console.log(`[driverArrived] Emitting to user_${delivery.user}`);
+    // Notify user via socket
+    const io = req.app.get('io');
+    io.to(`user_${delivery.user}`).emit('driver_arrived', {
+      deliveryId: delivery._id,
+    });
+
+    res.json({ success: true, data: delivery });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/deliveries/:id/verify-pickup
+// Driver enters the pickup code shown by the user
+exports.verifyPickupCode = async (req, res) => {
+  try {
+    const { pickupCode } = req.body;
+    const delivery = await Delivery.findById(req.params.id);
+
+    if (!delivery) return res.status(404).json({ success: false, message: 'Delivery not found' });
+
+    if (delivery.pickupCode !== pickupCode) {
+      return res.status(400).json({ success: false, message: 'Invalid pickup code' });
+    }
+
+    // Generate delivery code for recipient verification
+    const deliveryCode = Math.floor(1000 + Math.random() * 9000).toString();
+
+    await Delivery.findByIdAndUpdate(req.params.id, {
+      status: 'in_transit',
+      deliveryCode,
+    });
+
+    // Notify user package has been picked up
+    const io = req.app.get('io');
+    io.to(`user_${delivery.user}`).emit('package_picked_up', {
+      deliveryId: delivery._id,
+      deliveryCode,
+      pickupTime: new Date().toISOString(),
+    });
+
+    res.json({ success: true, data: { deliveryCode } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/deliveries/:id/verify-delivery
+// Driver enters the delivery code confirmed by the recipient
+exports.verifyDeliveryCode = async (req, res) => {
+  try {
+    const { deliveryCode } = req.body;
+    const delivery = await Delivery.findById(req.params.id);
+
+    if (!delivery) return res.status(404).json({ success: false, message: 'Delivery not found' });
+
+    if (delivery.deliveryCode !== deliveryCode) {
+      return res.status(400).json({ success: false, message: 'Invalid delivery code' });
+    }
+
+    res.json({ success: true, message: 'Code verified' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/deliveries/:id/delivered
+exports.markDelivered = async (req, res) => {
+  try {
+    const { driverId } = req.body;
+    const delivery = await Delivery.findByIdAndUpdate(
+      req.params.id,
+      { status: 'delivered' },
+      { new: true }
+    );
+await releaseEscrowToDriver({ userId: delivery.user, driverId: delivery.driver, amount: delivery.price, deliveryId: delivery._id });
+    if (!delivery) return res.status(404).json({ success: false, message: 'Delivery not found' });
+
+    // Free up driver
+    if (driverId) {
+      const Driver = require('../models/driver');
+      await Driver.findByIdAndUpdate(driverId, { status: 'online' });
+    }
+
+    // Notify user delivery is complete
+    const io = req.app.get('io');
+    io.to(`user_${delivery.user}`).emit('package_delivered', {
+      deliveryId: delivery._id,
+    });
+
+    res.json({ success: true, data: delivery });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getActiveDelivery = async (req, res) => {
+  try {
+    const delivery = await Delivery.findOne({
+      user: req.user._id,
+      status: {
+        $in: ['finding_driver', 'driver_assigned', 'driver_arrived', 'in_transit'],
+      },
+    }).sort({ createdAt: -1 });
+
+    res.json({ success: true, data: delivery ?? null });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+// POST /api/deliveries/:id/assign-driver
+// Called by real driver app on accept
+exports.assignDriver = async (req, res) => {
+  try {
+    const Driver = require('../models/driver');
+
+    const driver = await Driver.findOne({ user: req.user._id });
+    if (!driver) {
+      return res.status(404).json({ success: false, message: 'Driver profile not found' });
+    }
+
+    const delivery = await Delivery.findById(req.params.id);
+    if (!delivery) {
+      return res.status(404).json({ success: false, message: 'Delivery not found' });
+    }
+
+    const pickupCode = Math.floor(1000 + Math.random() * 9000).toString();
+
+    await Delivery.findByIdAndUpdate(req.params.id, {
+      status: 'driver_assigned',
+      driver: driver._id,
+      pickupCode,
+    });
+
+    if (driver.status !== 'busy') {
+      await Driver.findByIdAndUpdate(driver._id, { status: 'busy' });
+    }
+
+    const driverLocation = driver.location?.coordinates
+      ? { lat: driver.location.coordinates[1], lng: driver.location.coordinates[0] }
+      : null;
+
+    const io = req.app.get('io');
+    io.to(`user_${delivery.user}`).emit('driver_assigned', {
+      deliveryId: delivery._id,
+      driver: {
+        _id: driver._id,
+        name: driver.name,
+        phone: driver.phone,
+        vehicle: driver.vehicle,
+        rating: driver.rating,
+        photo: driver.photo ?? null,  
+      },
+      pickupCode,
+      eta: '20 mins',
+      driverLocation,
+    });
+
+    res.json({ success: true, data: { pickupCode } });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

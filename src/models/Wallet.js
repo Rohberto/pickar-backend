@@ -11,6 +11,13 @@ const walletSchema = new mongoose.Schema(
     balance: {
       type: Number,
       default: 0,
+      min: 0,
+    },
+    escrowBalance: {
+      // Funds held in escrow during active deliveries
+      type: Number,
+      default: 0,
+      min: 0,
     },
     currency: {
       type: String,
@@ -20,4 +27,4 @@ const walletSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model('Wallet', walletSchema);
+module.exports = mongoose.models.Wallet || mongoose.model('Wallet', walletSchema);

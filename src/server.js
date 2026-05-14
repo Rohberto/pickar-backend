@@ -59,6 +59,11 @@ app.use('/api/auth',       require('./routes/auth'));
 app.use('/api/deliveries', require('./routes/delivery'));
 app.use('/api/drivers',    require('./routes/driver'));
 app.use('/api/wallet',     require('./routes/wallet'));
+app.use('/api/users', require('./routes/user'));
+app.use('/api/wallet', require('./routes/wallet'));
+// src/app.js
+app.use('/api/chat', require('./routes/chat'));
+app.post('/api/webhook/paystack', express.raw({ type: '*/*' }), require('./controllers/walletController').paystackWebhook);
 
 // ── Health check ──────────────────────────────────────────────────
 app.get('/', (req, res) => {

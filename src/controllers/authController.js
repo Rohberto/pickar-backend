@@ -143,6 +143,22 @@ exports.verifyOTP = async (req, res) => {
 
     // Verify user
     user.isVerified = true;
+    if (user.userType === 'driver') {
+  const Driver = require('../models/driver');
+  const existingDriver = await Driver.findOne({ user: user._id });
+  if (!existingDriver) {
+    await Driver.create({
+      user: user._id,
+      name: user.fullName,
+      phone: user.phone,
+      status: 'offline',
+      location: {
+        type: 'Point',
+        coordinates: [3.3792, 6.5244], // default Lagos coords until they go online
+      },
+    });
+  }
+}
     user.otp = undefined;
     user.otpExpires = undefined;
     await user.save();

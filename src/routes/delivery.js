@@ -9,6 +9,12 @@ const {
   getDeliveryStatus,
   getDeliveryHistory,
   cancelDelivery,
+  driverArrived,        // add
+  verifyPickupCode,     // add
+  verifyDeliveryCode,   // add
+  markDelivered,        // add
+  getActiveDelivery,
+  assignDriver
 } = require('../controllers/deliveryController');
 
 // All delivery routes are protected
@@ -28,6 +34,8 @@ router.get('/ride-options', getRideOptions);
 // Also must come before /:id routes
 router.get('/history', getDeliveryHistory);
 
+router.get('/active', getActiveDelivery);
+
 // POST /api/deliveries/:id/select-ride
 // Step 3 — user picks truck/standard/eco_send/express
 router.post('/:id/select-ride', selectRide);
@@ -43,5 +51,24 @@ router.get('/:id/status', getDeliveryStatus);
 // POST /api/deliveries/:id/cancel
 // Cancel before driver is assigned
 router.post('/:id/cancel', cancelDelivery);
+// POST /api/deliveries/:id/driver-arrived
+// Driver confirms they are at the pickup location
+router.post('/:id/driver-arrived', driverArrived);
+
+// POST /api/deliveries/:id/verify-pickup
+// Driver enters the 4-digit pickup code the user shows them
+router.post('/:id/verify-pickup', verifyPickupCode);
+
+// POST /api/deliveries/:id/verify-delivery
+// Driver enters the delivery code at recipient's location
+router.post('/:id/verify-delivery', verifyDeliveryCode);
+
+// POST /api/deliveries/:id/delivered
+// Marks delivery as complete
+router.post('/:id/delivered', markDelivered);
+
+router.post('/:id/assign-driver', assignDriver);
+
+
 
 module.exports = router;

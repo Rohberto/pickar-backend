@@ -2,59 +2,50 @@ const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema(
   {
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-    },
-    wallet: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Wallet',
-      required: true,
-    },
+    // Either user or driver will be set
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    driver: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
+
     type: {
       type: String,
-      enum: ['credit', 'debit'],
-      required: true,
-    },
-    purpose: {
-      type: String,
       enum: [
-        'wallet_funding',   // user added money
-        'delivery_payment', // deducted for a trip
-        'refund',           // refund after cancellation
+        'topup',           // User added funds via Paystack
+        'delivery_debit',  // User paid for delivery
+        'escrow_hold',     // Funds moved to escrow
+        'escrow_release',  // Escrow released to driver earnings
+        'refund',          // Delivery cancelled — refund to user
+        'withdrawal',      // Driver withdrew to bank
+        'earning',         // Driver earned from completed delivery
       ],
       required: true,
     },
-    amount: {
-      type: Number,
-      required: true,
-    },
-    balanceBefore: { type: Number, required: true },
-    balanceAfter: { type: Number, required: true },
 
-    // Paystack specific
-    reference: {
-      type: String,
-      unique: true,
-      sparse: true, // allows null for debit transactions
-    },
-    paystackStatus: {
-      type: String,
-      enum: ['pending', 'success', 'failed'],
-      default: 'pending',
-    },
+    amount: { type: Number, required: true },
+    currency: { type: String, default: 'NGN' },
 
-    // Linked delivery (for debit transactions)
+    description: { type: String },
+
+    // Paystack reference (for topups)
+    paystackReference: { type: String, default: null },
+    paystackStatus: { type: String, default: null },
+
+    // Linked delivery
     delivery: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Delivery',
       default: null,
     },
 
-    description: { type: String },
+    status: {
+      type: String,
+      enum: ['pending', 'success', 'failed'],
+      default: 'success',
+    },
+
+    // Balance after this transaction (snapshot)
+    balanceAfter: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model('Transaction', transactionSchema);
+module.exports = mongoose.models.Transaction || mongoose.model('Transaction', transactionSchema);
