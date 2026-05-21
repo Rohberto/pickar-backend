@@ -358,3 +358,119 @@ exports.logout = async (req, res) => {
     message: 'Logged out successfully',
   });
 };
+
+exports.changePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+ 
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide old and new password',
+      });
+    }
+ 
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 8 characters',
+      });
+    }
+ 
+    const user = await User.findById(req.user.id).select('+password');
+    const isMatch = await user.comparePassword(oldPassword);
+ 
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: 'Old password is incorrect',
+      });
+    }
+ 
+    user.password = newPassword;
+    await user.save(); // pre-save hook hashes the new password automatically
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+ 
+// @desc    Forgot password — sends OTP to email
+// @route   POST /api/auth/forgot-password
+// @access  Public
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+ 
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Please provide your email' });
+    }
+ 
+    const user = await User.findOne({ email });
+    if (!user) {
+      // Don't reveal whether email exists — generic message
+      return res.status(200).json({
+        success: true,
+        message: 'If an account with that email exists, an OTP has been sent.',
+      });
+    }
+ 
+    const otp = generateOTP();
+    user.otp = otp;
+    user.otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+    await user.save();
+ 
+    await sendOTPEmail(email, otp, user.fullName);
+ 
+    res.json({ success: true, message: 'OTP sent to your email' });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+ 
+// @desc    Reset password — verify OTP then set new password
+// @route   POST /api/auth/reset-password
+// @access  Public
+exports.resetPassword = async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+ 
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+ 
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters',
+      });
+    }
+ 
+    const user = await User.findOne({ email }).select('+otp +otpExpires +password');
+ 
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+ 
+    if (!user.otp || user.otp !== otp) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    }
+ 
+    if (user.otpExpires < new Date()) {
+      return res.status(400).json({ success: false, message: 'OTP has expired' });
+    }
+ 
+    user.password = newPassword;
+    user.otp = undefined;
+    user.otpExpires = undefined;
+    await user.save(); // pre-save hook hashes automatically
+ 
+    res.json({ success: true, message: 'Password reset successfully. Please log in.' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+ 

@@ -10,6 +10,9 @@ const {
   login,
   getMe,
   logout,
+  changePassword,
+  forgotPassword,
+  resetPassword
 } = require('../controllers/authController');
 
 // Public routes
@@ -29,5 +32,8 @@ router.post('/login', login);
 // Protected routes
 router.get('/me', protect, getMe);
 router.post('/logout', protect, logout);
+router.post('/change-password', protect, changePassword);
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password', resetPassword);
 
 module.exports = router;
