@@ -13,7 +13,10 @@ const driverSchema = new mongoose.Schema(
       type: { type: String, enum: ['bike', 'truck']},
       plateNumber: { type: String },
     },
-    rating: { type: Number, default: 5.0 },
+    rating: {
+     average: { type: Number, default: 0 },
+     count:   { type: Number, default: 0 },
+},
 
     status: {
       type: String,

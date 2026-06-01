@@ -16,6 +16,7 @@ const {
   getActiveDelivery,
   assignDriver
 } = require('../controllers/deliveryController');
+const { rateDelivery } = require('../controllers/ratingControllers');
 
 // All delivery routes are protected
 router.use(protect);
@@ -68,6 +69,9 @@ router.post('/:id/verify-delivery', verifyDeliveryCode);
 router.post('/:id/delivered', markDelivered);
 
 router.post('/:id/assign-driver', assignDriver);
+//rating 
+router.post('/:id/rate', protect, rateDelivery);
+
 
 
 
