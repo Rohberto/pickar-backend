@@ -18,9 +18,17 @@ const matchDriver = async (deliveryId, io) => {
     delivery.pickupAddress.coordinates.lat,
   ];
 
+  // ── Vehicle filter ────────────────────────────────────────────────
+  // Truck bookings (house loads) only go to truck drivers.
+  // Everything else only goes to bike drivers.
+  const vehicleFilter = delivery.rideType === 'truck'
+    ? { 'vehicle.type': 'truck' }
+    : { 'vehicle.type': 'bike' };
+
   const candidates = await Driver.find({
     status: 'online',
     socketId: { $ne: null },
+    ...vehicleFilter,
     location: {
       $near: {
         $geometry: { type: 'Point', coordinates: [lng, lat] },
@@ -29,7 +37,9 @@ const matchDriver = async (deliveryId, io) => {
     },
   }).limit(MAX_CANDIDATES);
 
-  console.log(`[matchDriver] Delivery ${deliveryId} — found ${candidates.length} candidates`);
+  console.log(
+    `[matchDriver] Delivery ${deliveryId} — rideType: ${delivery.rideType ?? 'standard'} — found ${candidates.length} ${delivery.rideType === 'truck' ? 'truck' : 'bike'} drivers`
+  );
 
   if (candidates.length === 0) {
     // Keep as finding_driver NOT pending/cancelled — user can retry from home screen
@@ -38,7 +48,9 @@ const matchDriver = async (deliveryId, io) => {
     io.to(`user_${delivery.user._id}`).emit('no_drivers_available', {
       deliveryId,
       canRetry: true,
-      message: 'No drivers available nearby. Tap to search again.',
+      message: delivery.rideType === 'truck'
+        ? 'No truck drivers available nearby. Tap to search again.'
+        : 'No drivers available nearby. Tap to search again.',
     });
     return;
   }
@@ -64,7 +76,9 @@ const offerToNext = (delivery, candidates, index, io) => {
       io.to(`user_${delivery.user._id ?? delivery.user}`).emit('no_drivers_available', {
         deliveryId: delivery._id,
         canRetry: true,
-        message: 'No drivers accepted your request. Tap to search again.',
+        message: delivery.rideType === 'truck'
+          ? 'No truck drivers accepted your request. Tap to search again.'
+          : 'No drivers accepted your request. Tap to search again.',
       });
       return resolve();
     }

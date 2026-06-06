@@ -54,6 +54,25 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+     // ── Admin-managed fields ──────────────────────────────────────────────────
+    isSuspended: {
+      type: Boolean,
+      default: false,
+    },
+    suspensionReason: {
+      type: String,
+      default: null,
+    },
+    // Drivers only — more granular than the boolean isApproved
+    approvalStatus: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending',
+    },
+    approvalReason: {
+      type: String,
+      default: null,
+    },
   },
   { timestamps: true }
 );

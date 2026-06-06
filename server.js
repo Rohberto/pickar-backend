@@ -5,6 +5,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const connectDB = require('./src/config/db');
 const initSocket = require('./src/socket');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./src/config/swagger');
 
 const app = express();
 const server = http.createServer(app);
@@ -61,9 +63,11 @@ app.use('/api/drivers',    require('./src/routes/driver'));
 app.use('/api/wallet',     require('./src/routes/wallet'));
 app.use('/api/users', require('./src/routes/user'));
 app.use('/api/wallet', require('./src/routes/wallet'));
+app.use('/api/admin', require('./src/routes/admin'));
 // src/app.js
 app.use('/api/chat', require('./src/routes/chat'));
 app.post('/api/webhook/paystack', express.raw({ type: '*/*' }), require('./src/controllers/walletController').paystackWebhook);
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ── Health check ──────────────────────────────────────────────────
 app.get('/', (req, res) => {

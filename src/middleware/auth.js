@@ -1,4 +1,3 @@
-
 const jwt = require('jsonwebtoken');
 const User = require('../models/user');
 
@@ -24,6 +23,15 @@ const protect = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: 'User not found',
+      });
+    }
+
+    // Block suspended accounts — set by admin via PATCH /api/admin/users/:id/suspend
+    if (req.user.isSuspended) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account has been suspended. Please contact support.',
+        suspended: true,
       });
     }
 
