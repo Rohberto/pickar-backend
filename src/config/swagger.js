@@ -18,7 +18,7 @@ const options = {
       },
       {
         url: 'https://pickar-backend.onrender.com',
-        description: 'Production server (update with your Render URL)',
+        description: 'Production server ',
       },
     ],
     components: {
