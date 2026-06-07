@@ -12,10 +12,11 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const Admin = require('../models/Admin');
-const connectDB = require('../config/db');
 
 const seed = async () => {
-  await connectDB();
+  // Connect directly — bypasses your Express middleware version of connectDB
+  await mongoose.connect(process.env.MONGODB_URI);
+  console.log('MongoDB connected');
 
   const email    = process.env.ADMIN_EMAIL    || 'admin@pickar.ng';
   const password = process.env.ADMIN_PASSWORD || 'SuperSecret123!';
@@ -24,11 +25,13 @@ const seed = async () => {
   const existing = await Admin.findOne({ email });
   if (existing) {
     console.log(`✅  Admin already exists: ${email}`);
+    await mongoose.disconnect();
     process.exit(0);
   }
 
   await Admin.create({ fullName, email, password, role: 'super_admin' });
   console.log(`✅  Super admin created: ${email}`);
+  await mongoose.disconnect();
   process.exit(0);
 };
 
