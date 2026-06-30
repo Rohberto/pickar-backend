@@ -132,6 +132,7 @@ exports.selectRide = async (req, res) => {
         rideType,
         price: selected.discountedPrice,
         estimatedArrival: selected.eta,
+        status: 'finding_driver',
       },
       { new: true }
     );
@@ -143,7 +144,17 @@ exports.selectRide = async (req, res) => {
       });
     }
 
+    // Respond to client immediately — don't await matchDriver
+    // matchDriver runs in the background and notifies via socket
     res.status(200).json({ success: true, data: delivery });
+
+    // Trigger driver matching — works for all ride types including truck
+    const { matchDriver } = require('../services/matchingService');
+    const io = req.app.get('io');
+    matchDriver(delivery._id, io).catch((err) =>
+      console.error('[selectRide] matchDriver error:', err)
+    );
+
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
