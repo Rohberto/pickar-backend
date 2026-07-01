@@ -14,7 +14,8 @@ const {
   verifyDeliveryCode,   // add
   markDelivered,        // add
   getActiveDelivery,
-  assignDriver
+  assignDriver,
+  cancelStuck
 } = require('../controllers/deliveryController');
 const { rateDelivery } = require('../controllers/ratingControllers');
 
@@ -71,6 +72,7 @@ router.post('/:id/delivered', markDelivered);
 router.post('/:id/assign-driver', assignDriver);
 //rating 
 router.post('/:id/rate', protect, rateDelivery);
+router.post('/cancel-stuck', protect, cancelStuck);
 
 
 

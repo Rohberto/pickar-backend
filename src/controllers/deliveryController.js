@@ -459,3 +459,41 @@ exports.assignDriver = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+// ─────────────────────────────────────────────────────────────────
+// ADD TO: src/controllers/deliveryController.js
+// ─────────────────────────────────────────────────────────────────
+
+exports.cancelStuck = async (req, res) => {
+  try {
+    // Cancel all deliveries stuck in finding_driver or pending for this user
+    const result = await Delivery.updateMany(
+      {
+        user: req.user._id,
+        status: { $in: ['finding_driver', 'pending'] },
+      },
+      {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancellationReason: 'Cancelled by user — stuck in search',
+      }
+    );
+
+    res.json({
+      success: true,
+      message: `${result.modifiedCount} delivery(s) cancelled.`,
+      cancelled: result.modifiedCount,
+    });
+  } catch (err) {
+    console.error('[cancelStuck] error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+
+// ─────────────────────────────────────────────────────────────────
+// ADD TO: src/routes/delivery.js
+// (alongside your other delivery routes)
+// ─────────────────────────────────────────────────────────────────
+
+// router.post('/cancel-stuck', protect, deliveryController.cancelStuck);
