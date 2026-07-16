@@ -197,18 +197,23 @@ exports.getDashboard = async (req, res) => {
         { $match: { createdAt: { $gte: since } } },
         {
           $group: {
-            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-            total: { $sum: 1 },
-            ongoing: {
-              $sum: {
-                $cond: [
-                  { $in: ['$status', ['driver_assigned', 'driver_arrived', 'in_transit']] },
-                  1,
-                  0,
-                ],
-              },
-            },
+        _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+        total: { $sum: 1 },
+        ongoing: {
+          $sum: {
+            $cond: [
+              { $in: ['$status', ['driver_assigned', 'driver_arrived', 'in_transit']] },
+              1,
+              0,
+            ],
           },
+        },
+        revenue: {
+          $sum: {
+            $cond: [{ $eq: ['$status', 'delivered'] }, '$price', 0],
+          },
+        },
+      },
         },
         { $sort: { _id: 1 } },
       ]),
