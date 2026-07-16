@@ -40,6 +40,11 @@ const initSocket = (io) => {
   }
 });
 
+socket.on('join_delivery_room', ({ deliveryId }) => {
+  if (!deliveryId) return;
+  socket.join(`delivery_${deliveryId}`);
+});
+
     // ─────────────────────────────────────────────────────────────
     // DRIVER — online / offline / location
     // ─────────────────────────────────────────────────────────────
@@ -72,17 +77,16 @@ const initSocket = (io) => {
 
     // Driver sends live GPS updates while on a trip.
     // Broadcasts location to the user currently tracking them.
-    socket.on('driver_location_update', async ({ driverId, lat, lng }) => {
+  socket.on('driver_location_update', async ({ driverId, lat, lng }) => {
       if (!driverId) return;
 
       await Driver.findByIdAndUpdate(driverId, {
         location: { type: 'Point', coordinates: [lng, lat] },
       });
 
-      // Find the active delivery this driver is on
       const delivery = await Delivery.findOne({
         driver: driverId,
-       status: { $in: ['driver_assigned', 'driver_arrived', 'in_transit'] },
+        status: { $in: ['driver_assigned', 'driver_arrived', 'in_transit'] },
       });
 
       if (delivery) {
@@ -90,9 +94,12 @@ const initSocket = (io) => {
           location: { lat, lng },
           deliveryId: delivery._id,
         });
+        io.to(`delivery_${delivery._id}`).emit('driver_location', {
+          location: { lat, lng },
+          deliveryId: delivery._id,
+        });
       }
     });
-
     // ─────────────────────────────────────────────────────────────
     // DRIVER — trip response
     //
