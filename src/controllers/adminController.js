@@ -24,6 +24,24 @@ const formatAdmin = (admin) => ({
   createdAt: admin.createdAt,
 });
 
+const zeroFillDailyDeliveries = (rawDaily, days) => {
+  const byDate = new Map(rawDaily.map((d) => [d._id, d]));
+  const result = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const existing = byDate.get(dateStr);
+    result.push({
+      _id: dateStr,
+      total: existing?.total || 0,
+      ongoing: existing?.ongoing || 0,
+      revenue: existing?.revenue || 0,
+    });
+  }
+  return result;
+};
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -193,27 +211,25 @@ exports.getDashboard = async (req, res) => {
         .select('status createdAt price'),
 
       // Daily delivery counts for the analytics chart
-      Delivery.aggregate([
+Delivery.aggregate([
         { $match: { createdAt: { $gte: since } } },
         {
           $group: {
-        _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-        total: { $sum: 1 },
-        ongoing: {
-          $sum: {
-            $cond: [
-              { $in: ['$status', ['driver_assigned', 'driver_arrived', 'in_transit']] },
-              1,
-              0,
-            ],
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            total: { $sum: 1 },
+            ongoing: {
+              $sum: {
+                $cond: [
+                  { $in: ['$status', ['driver_assigned', 'driver_arrived', 'in_transit']] },
+                  1,
+                  0,
+                ],
+              },
+            },
+            revenue: {
+              $sum: { $cond: [{ $eq: ['$status', 'delivered'] }, '$price', 0] },
+            },
           },
-        },
-        revenue: {
-          $sum: {
-            $cond: [{ $eq: ['$status', 'delivered'] }, '$price', 0],
-          },
-        },
-      },
         },
         { $sort: { _id: 1 } },
       ]),
@@ -236,7 +252,7 @@ exports.getDashboard = async (req, res) => {
           cancelledDeliveries,
           totalDeliveries,
         },
-        deliveryAnalytics: dailyDeliveries,
+    deliveryAnalytics: zeroFillDailyDeliveries(dailyDeliveries, days),
         recentUsers,
         recentDeliveries: recentDeliveries.map((d) => ({
           id: d._id,
