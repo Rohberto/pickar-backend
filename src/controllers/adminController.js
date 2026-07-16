@@ -177,8 +177,8 @@ exports.getDashboard = async (req, res) => {
       dailyDeliveries,
     ] = await Promise.all([
       // User stats
-      User.countDocuments({ userType: 'sender' }),
-      User.countDocuments({ userType: 'sender', isSuspended: { $ne: true } }),
+      User.countDocuments({ userType: 'user' }),
+      User.countDocuments({ userType: 'user', isSuspended: { $ne: true } }),
 
       // Driver stats
       User.countDocuments({ userType: 'driver' }),
@@ -197,7 +197,7 @@ exports.getDashboard = async (req, res) => {
       ]),
 
       // Recent users (for sidebar panel)
-      User.find({ userType: 'sender' })
+   User.find({ userType: 'user' })
         .sort({ createdAt: -1 })
         .limit(5)
         .select('fullName email phone photo createdAt'),
@@ -289,7 +289,7 @@ exports.getUsers = async (req, res) => {
     const skip = (Number(page) - 1) * Number(limit);
 
     // Build filter
-    const filter = { userType: 'sender' };
+    const filter = { userType: 'user' };
     if (status === 'suspended') filter.isSuspended = true;
     else if (status === 'active') filter.isSuspended = { $ne: true };
     else if (status === 'inactive') filter.isSuspended = false;
@@ -312,9 +312,9 @@ exports.getUsers = async (req, res) => {
 
         User.countDocuments(filter),
 
-        User.countDocuments({ userType: 'sender' }),
-        User.countDocuments({ userType: 'sender', isSuspended: { $ne: true } }),
-        User.countDocuments({ userType: 'sender', isSuspended: true }),
+       User.countDocuments({ userType: 'user' }),
+        User.countDocuments({ userType: 'user', isSuspended: { $ne: true } }),
+        User.countDocuments({ userType: 'user', isSuspended: true }),
       ]);
 
     res.status(200).json({
@@ -347,7 +347,7 @@ exports.getUsers = async (req, res) => {
  */
 exports.getUserById = async (req, res) => {
   try {
-    const user = await User.findOne({ _id: req.params.id, userType: 'sender' });
+    const user = await User.findOne({ _id: req.params.id, userType: 'user' });
 
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found.' });
@@ -393,7 +393,7 @@ exports.toggleUserSuspension = async (req, res) => {
     const { suspend, reason } = req.body;
 
     const user = await User.findOneAndUpdate(
-      { _id: req.params.id, userType: 'sender' },
+      { _id: req.params.id, userType: 'user' },
       {
         isSuspended: suspend,
         suspensionReason: suspend ? (reason || 'Suspended by admin') : null,
