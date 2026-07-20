@@ -137,6 +137,10 @@ exports.removeBankAccount = async (req, res) => {
 
 // POST /api/drivers/withdraw
 // Body: { amount, bankAccountId }
+// POST /api/drivers/withdraw
+// Body: { amount, bankAccountId }
+// Debits earnings immediately and files a request — admin approval now
+// required before any Paystack transfer is attempted.
 exports.withdraw = async (req, res) => {
   try {
     const { amount, bankAccountId } = req.body;
@@ -153,53 +157,18 @@ exports.withdraw = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Bank account not found' });
     }
 
-    // Debit earnings immediately so balance reflects the request
-    await debitDriverEarnings({ driverId: driver._id, amount });
-
-    // Create a pending withdrawal record
-    const withdrawal = await Transaction.findOneAndUpdate(
-      { driver: driver._id, type: 'withdrawal', status: 'pending', amount },
-      {
-        driver: driver._id,
-        type: 'withdrawal',
-        amount,
-        status: 'pending',
-        description: `Withdrawal to ${bankAccount.bankName} – ${bankAccount.accountNumber}`,
-      },
-      { upsert: true, new: true }
-    );
-
-    // Try Paystack transfer — if it fails, mark as pending for manual review
-    // instead of returning an error to the driver
-    try {
-      if (bankAccount.paystackRecipientCode) {
-        const transfer = await initiateTransfer({
-          recipientCode: bankAccount.paystackRecipientCode,
-          amountNaira: amount,
-          reason: 'Pickar driver withdrawal',
-        });
-
-        // Transfer initiated — update transaction with transfer code
-        await Transaction.findByIdAndUpdate(withdrawal._id, {
-          paystackReference: transfer.transferCode,
-          paystackStatus: transfer.status,
-          // 'otp' status means Paystack needs OTP — treat as pending
-          status: transfer.status === 'success' ? 'success' : 'pending',
-          description: `Withdrawal to ${bankAccount.bankName} – ${bankAccount.accountNumber} (${transfer.status})`,
-        });
-      }
-    } catch (transferErr) {
-      // Paystack failed — keep as pending for manual processing
-      // Don't expose Paystack errors to the driver
-      console.error('[Withdraw] Paystack transfer failed:', transferErr.message);
-    }
+    const { earnings } = await debitDriverEarnings({
+      driverId: driver._id,
+      amount,
+      bankAccountId: bankAccount._id,
+      description: `Withdrawal requested to ${bankAccount.bankName} – ${bankAccount.accountNumber}`,
+    });
 
     res.json({
       success: true,
-      message: `Withdrawal of ₦${amount.toLocaleString()} is being processed. Funds will arrive in your ${bankAccount.bankName} account within 24 hours.`,
-      data: { status: 'pending', amount, bankName: bankAccount.bankName },
+      message: `Withdrawal request of ₦${amount.toLocaleString()} submitted for admin approval.`,
+      data: { status: 'pending', amount, balance: earnings.balance, bankName: bankAccount.bankName },
     });
-
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

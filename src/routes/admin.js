@@ -31,8 +31,14 @@ router.patch('/drivers/:id/suspend', ctrl.toggleDriverSuspension);
 router.get('/deliveries', ctrl.getDeliveries);
 router.get('/deliveries/:id', ctrl.getDeliveryById);
 
+
 // Payments
 router.get('/payments', ctrl.getPayments);
+router.get('/payments/stats', ctrl.getPaymentStats);
+router.get('/payments/topups', ctrl.getWalletTopups);
+router.get('/payments/withdrawals', ctrl.getWithdrawals);
+router.patch('/payments/withdrawals/:id/approve', restrictTo('super_admin'), ctrl.approveWithdrawal);
+router.patch('/payments/withdrawals/:id/reject', ctrl.rejectWithdrawal);
 
 // ─── Migrations (super_admin only) ───────────────────────────────────────────
 router.post('/migrations/ratings', restrictTo('super_admin'), ctrl.migrateRatings);

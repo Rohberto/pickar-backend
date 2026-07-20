@@ -5,6 +5,9 @@ const Delivery = require('../models/Delivery');
 const Transaction = require('../models/Transaction');
 const { DriverEarnings } = require('../models/DriverEarnings');
 const jwt = require('jsonwebtoken');
+const { initiateTransfer } = require('../services/paystackService');
+const { reverseWithdrawal } = require('../services/walletService');
+const Wallet = require('../models/Wallet');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -940,6 +943,180 @@ exports.getPayments = async (req, res) => {
   }
 };
 
+exports.getPaymentStats = async (req, res) => {
+  try {
+    const [escrowAgg, toppedUpAgg, pendingCount, processedCount] = await Promise.all([
+      Wallet.aggregate([{ $group: { _id: null, total: { $sum: '$escrowBalance' } } }]),
+      Transaction.aggregate([
+        { $match: { type: 'topup', status: 'success' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } },
+      ]),
+      Transaction.countDocuments({ type: 'withdrawal', status: 'pending' }),
+      Transaction.countDocuments({ type: 'withdrawal', status: 'success' }),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        escrowBalance: escrowAgg[0]?.total || 0,
+        totalToppedUp: toppedUpAgg[0]?.total || 0,
+        pendingWithdrawals: pendingCount,
+        processedWithdrawals: processedCount,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getWalletTopups = async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+    const filter = { type: 'topup' };
+
+    const [topups, total] = await Promise.all([
+      Transaction.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .populate('user', 'fullName email photo')
+        .select('amount status paystackStatus paystackReference createdAt'),
+      Transaction.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        topups: topups.map((t) => ({
+          id: t._id,
+          userName: t.user?.fullName || '—',
+          userPhoto: t.user?.photo || null,
+          amount: t.amount,
+          status: t.status,
+          reference: t.paystackReference,
+          date: t.createdAt,
+        })),
+        pagination: {
+          total,
+          page: Number(page),
+          limit: Number(limit),
+          totalPages: Math.ceil(total / Number(limit)),
+        },
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getWithdrawals = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, status = 'pending' } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+    const filter = { type: 'withdrawal', status };
+
+    const [withdrawals, total] = await Promise.all([
+      Transaction.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .populate({ path: 'driver', select: 'name phone photo' })
+        .populate('bankAccount', 'bankName accountNumber accountName')
+        .select('amount status paystackStatus createdAt'),
+      Transaction.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        withdrawals: withdrawals.map((w) => ({
+          id: w._id,
+          driverName: w.driver?.name || '—',
+          driverPhoto: w.driver?.photo || null,
+          amount: w.amount,
+          bankName: w.bankAccount?.bankName || '—',
+          accountNumber: w.bankAccount?.accountNumber || '—',
+          accountName: w.bankAccount?.accountName || '—',
+          status: w.status,
+          date: w.createdAt,
+        })),
+        pagination: {
+          total,
+          page: Number(page),
+          limit: Number(limit),
+          totalPages: Math.ceil(total / Number(limit)),
+        },
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PATCH /api/admin/payments/withdrawals/:id/approve
+exports.approveWithdrawal = async (req, res) => {
+  try {
+    const transaction = await Transaction.findById(req.params.id).populate('bankAccount');
+
+    if (!transaction || transaction.type !== 'withdrawal') {
+      return res.status(404).json({ success: false, message: 'Withdrawal request not found.' });
+    }
+    if (transaction.status !== 'pending') {
+      return res.status(400).json({ success: false, message: 'This request has already been processed.' });
+    }
+    if (!transaction.bankAccount?.paystackRecipientCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Driver has no verified bank account on file for this request.',
+      });
+    }
+
+    const transfer = await initiateTransfer({
+      recipientCode: transaction.bankAccount.paystackRecipientCode,
+      amountNaira: transaction.amount,
+      reason: 'Pickar driver withdrawal',
+    });
+
+    transaction.paystackReference = transfer.transferCode;
+    transaction.paystackStatus = transfer.status;
+    transaction.status = transfer.status === 'success' ? 'success' : 'pending';
+    await transaction.save();
+
+    res.json({
+      success: true,
+      message:
+        transaction.status === 'success'
+          ? 'Withdrawal approved and transferred.'
+          : `Withdrawal approved — Paystack transfer status: ${transfer.status}.`,
+      data: { id: transaction._id, status: transaction.status },
+    });
+  } catch (err) {
+    console.error('Approve withdrawal error:', err);
+    res.status(500).json({
+      success: false,
+      message: `Transfer failed: ${err.message}. Request remains pending — you can retry.`,
+    });
+  }
+};
+
+
+// PATCH /api/admin/payments/withdrawals/:id/reject
+// Body: { reason?: string }
+exports.rejectWithdrawal = async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const { transaction } = await reverseWithdrawal({ transactionId: req.params.id, reason });
+
+    res.json({
+      success: true,
+      message: 'Withdrawal rejected and driver balance restored.',
+      data: { id: transaction._id, status: transaction.status },
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
 // ─── Migrations ───────────────────────────────────────────────────────────────
 
 /**

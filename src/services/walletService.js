@@ -138,7 +138,10 @@ const refundEscrow = async ({ userId, amount, deliveryId }) => {
 /**
  * Debit driver earnings for a withdrawal
  */
-const debitDriverEarnings = async ({ driverId, amount, deliveryId }) => {
+/**
+ * Debit driver earnings for a withdrawal
+ */
+const debitDriverEarnings = async ({ driverId, amount, bankAccountId, description }) => {
   const earnings = await DriverEarnings.findOne({ driver: driverId });
   if (!earnings) throw new Error('Driver earnings account not found');
   if (earnings.balance < amount) throw new Error('Insufficient earnings balance');
@@ -147,17 +150,47 @@ const debitDriverEarnings = async ({ driverId, amount, deliveryId }) => {
   earnings.totalWithdrawn += amount;
   await earnings.save();
 
-  await Transaction.create({
+  const transaction = await Transaction.create({
     driver: driverId,
+    bankAccount: bankAccountId || null,
     type: 'withdrawal',
     amount,
-    description: `Withdrawal of ₦${amount.toLocaleString()}`,
-    delivery: deliveryId || null,
-    status: 'pending', // pending until transfer confirms
+    description: description || `Withdrawal request of ₦${amount.toLocaleString()}`,
+    status: 'pending', // pending until admin approves and transfer confirms
     balanceAfter: earnings.balance,
   });
 
-  return earnings;
+  return { earnings, transaction };
+};
+
+/**
+ * Reverse a rejected withdrawal — credits the earnings balance back
+ * and marks the original transaction as failed. Called by admin reject.
+ */
+const reverseWithdrawal = async ({ transactionId, reason }) => {
+  const transaction = await Transaction.findById(transactionId);
+  if (!transaction || transaction.type !== 'withdrawal') {
+    throw new Error('Withdrawal transaction not found');
+  }
+  if (transaction.status !== 'pending') {
+    throw new Error('Only pending withdrawals can be rejected');
+  }
+
+  const earnings = await DriverEarnings.findOne({ driver: transaction.driver });
+  if (!earnings) throw new Error('Driver earnings account not found');
+
+  earnings.balance += transaction.amount;
+  earnings.totalWithdrawn -= transaction.amount;
+  await earnings.save();
+
+  transaction.status = 'failed';
+  transaction.description = reason
+    ? `Withdrawal rejected: ${reason}`
+    : 'Withdrawal rejected by admin';
+  transaction.balanceAfter = earnings.balance;
+  await transaction.save();
+
+  return { earnings, transaction };
 };
 
 module.exports = {
@@ -167,4 +200,5 @@ module.exports = {
   releaseEscrowToDriver,
   refundEscrow,
   debitDriverEarnings,
+  reverseWithdrawal,
 };

@@ -2,10 +2,10 @@ const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema(
   {
-    // Either user or driver will be set
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  
+user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     driver: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver', default: null },
-
+    bankAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'BankAccount', default: null },
     type: {
       type: String,
       enum: [
