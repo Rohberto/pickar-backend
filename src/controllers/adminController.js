@@ -2,6 +2,7 @@ const Admin = require('../models/Admin');
 const User = require('../models/user');
 const Driver = require('../models/driver');
 const Delivery = require('../models/Delivery');
+const Transaction = require('../models/Transaction');
 const { DriverEarnings } = require('../models/DriverEarnings');
 const jwt = require('jsonwebtoken');
 
@@ -519,12 +520,19 @@ exports.getDriverById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Driver not found.' });
     }
 
-    const [totalTrips, earnings] = await Promise.all([
+    const [totalTrips, earnings, recentDeliveries, recentTransactions] = await Promise.all([
       Delivery.countDocuments({ driver: driver._id, status: 'delivered' }),
       DriverEarnings.findOne({ driver: driver._id }),
+      Delivery.find({ driver: driver._id })
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .select('status price pickupAddress recipient createdAt'),
+      Transaction.find({ driver: driver._id })
+        .sort({ createdAt: -1 })
+        .limit(10)
+        .select('type amount status createdAt description'),
     ]);
 
-    // Calculate years of service
     const yearsOfService = (
       (Date.now() - new Date(driver.user.createdAt).getTime()) /
       (1000 * 60 * 60 * 24 * 365)
@@ -555,6 +563,22 @@ exports.getDriverById = async (req, res) => {
           totalEarned: earnings?.totalEarned || 0,
           currentBalance: earnings?.balance || 0,
         },
+        recentDeliveries: recentDeliveries.map((d) => ({
+          id: d._id,
+          status: d.status,
+          price: d.price,
+          pickupAddress: d.pickupAddress?.label,
+          dropoffAddress: d.recipient?.address?.label,
+          date: d.createdAt,
+        })),
+        recentTransactions: recentTransactions.map((t) => ({
+          id: t._id,
+          type: t.type,
+          amount: t.amount,
+          status: t.status,
+          description: t.description,
+          date: t.createdAt,
+        })),
       },
     });
   } catch (err) {
@@ -562,7 +586,6 @@ exports.getDriverById = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };
-
 /**
  * PATCH /api/admin/drivers/:id/approval
  * Approve, reject, or pend a driver application

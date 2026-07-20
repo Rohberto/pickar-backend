@@ -51,19 +51,26 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
 
     // Driver comes online — saves socketId, GPS, status to DB.
     // lat & lng are REQUIRED so matchDriver's $near query can find them.
-    socket.on('driver_online', async ({ driverId, lat, lng }) => {
-      if (!driverId) return;
-      await Driver.findByIdAndUpdate(driverId, {
-        status: 'online',
-        socketId: socket.id,
-        location: {
-          type: 'Point',
-          coordinates: [lng, lat],
-        },
-      });
-      socket.join(`driver_${driverId}`);
-      console.log(`Driver ${driverId} is online at [${lat}, ${lng}]`);
+   socket.on('driver_online', async ({ driverId, lat, lng }) => {
+  const driver = await Driver.findById(driverId).populate('user', 'isApproved isSuspended');
+
+  if (!driver || !driver.user?.isApproved || driver.user?.isSuspended) {
+    socket.emit('online_denied', {
+      reason: !driver?.user?.isApproved
+        ? 'Your account is pending admin approval.'
+        : 'Your account has been suspended.',
     });
+    return;
+  }
+
+  await Driver.findByIdAndUpdate(driverId, {
+    status: 'online',
+    socketId: socket.id,
+    location: { type: 'Point', coordinates: [lng, lat] },
+  });
+  socket.join(`driver_${driverId}`);
+  console.log(`Driver ${driverId} is online`);
+});
 
     // Driver goes offline — clear socketId so matchDriver skips them.
     socket.on('driver_offline', async ({ driverId }) => {

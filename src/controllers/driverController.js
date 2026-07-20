@@ -4,13 +4,23 @@ const Delivery = require('../models/Delivery');
 // POST /api/drivers/online
 exports.goOnline = async (req, res) => {
   try {
+    if (!req.user.isApproved) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is pending admin approval. You cannot go online yet.',
+      });
+    }
+    if (req.user.isSuspended) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account has been suspended.',
+      });
+    }
+
     const { lat, lng } = req.body;
     const driver = await Driver.findOneAndUpdate(
       { user: req.user._id },
-      {
-        status: 'online',
-        location: { type: 'Point', coordinates: [lng, lat] },
-      },
+      { status: 'online', location: { type: 'Point', coordinates: [lng, lat] } },
       { new: true }
     );
     res.json({ success: true, data: driver });
@@ -127,7 +137,7 @@ exports.getActiveTrips = async (req, res) => {
 // PATCH /api/drivers/me
 exports.updateMe = async (req, res) => {
   try {
-    const allowed = ['name', 'phone', 'photo', 'vehicle'];
+    const allowed = ['name', 'phone', 'photo', 'vehicle', 'nationality', 'stateOfOrigin', 'residentialAddress'];
     const updates = {};
     allowed.forEach(field => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];

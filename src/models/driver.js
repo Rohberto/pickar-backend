@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-
 const driverSchema = new mongoose.Schema(
   {
     user: {
@@ -13,20 +12,20 @@ const driverSchema = new mongoose.Schema(
       type: { type: String, enum: ['bike', 'truck']},
       plateNumber: { type: String },
     },
-    rating: {
-     average: { type: Number, default: 0 },
-     count:   { type: Number, default: 0 },
-},
+    rating: { type: Number, default: 5.0 },
+    nationality: { type: String, default: null },
+    stateOfOrigin: { type: String, default: null },
+    residentialAddress: { type: String, default: null },
 
     status: {
       type: String,
-      enum: ['offline', 'online', 'busy'], // busy = on a trip
+      enum: ['offline', 'online', 'busy'],
       default: 'offline',
     },
     photo: {
-  type: String,
-  default: null,
-},
+      type: String,
+      default: null,
+    },
 
     // GeoJSON — required for $near queries
 location: {
