@@ -25,6 +25,7 @@
     "mongoose": "^9.3.3",
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
+    "nanoid": "^5.1.16",
     "nodemailer": "^8.0.1",
     "socket.io": "^4.8.3",
     "swagger-jsdoc": "^6.3.0",

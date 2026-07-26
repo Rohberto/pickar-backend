@@ -57,13 +57,24 @@ app.use('/uploads', express.static('uploads'));
 app.use('/api/wallet/webhook', express.raw({ type: 'application/json' }));
 
 // ── Routes ────────────────────────────────────────────────────────
-app.use('/api/auth',       require('./src/routes/auth'));
-app.use('/api/deliveries', require('./src/routes/delivery'));
-app.use('/api/drivers',    require('./src/routes/driver'));
-app.use('/api/wallet',     require('./src/routes/wallet'));
-app.use('/api/users', require('./src/routes/user'));
-app.use('/api/wallet', require('./src/routes/wallet'));
-app.use('/api/admin', require('./src/routes/admin'));
+app.use('/api/auth',          require('./src/routes/auth'));
+app.use('/api/deliveries',    require('./src/routes/delivery'));
+app.use('/api/drivers',       require('./src/routes/driver'));
+app.use('/api/wallet',        require('./src/routes/wallet'));
+app.use('/api/users',         require('./src/routes/user'));
+app.use('/api/wallet',        require('./src/routes/wallet'));
+app.use('/api/admin',         require('./src/routes/admin'));
+app.use('/api/business-auth', require('./src/routes/businessAuth'));
+app.use('/api/business',      require('./src/routes/business'));
+app.use('/api/track',         require('./src/routes/tracking'));
+
+// Public tracking page — track.pickar.ng/:token, no app download required.
+// Serves the same static HTML for any token; the page's own client-side JS
+// reads the token from the URL and calls /api/track/:token for data.
+app.get('/track/:token', (req, res) => {
+  res.sendFile(require('path').join(__dirname, 'src', 'public', 'track.html'));
+});
+
 // src/app.js
 app.use('/api/chat', require('./src/routes/chat'));
 app.post('/api/webhook/paystack', express.raw({ type: '*/*' }), require('./src/controllers/walletController').paystackWebhook);
