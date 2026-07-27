@@ -87,9 +87,9 @@ exports.createBatchOrder = async (req, res) => {
       }
 
       validated.push({
-        pickupAddress,
+        pickupAddress: { label: pickupAddress },
         recipient: {
-          address: recipientAddress,
+          address: { label: recipientAddress },
           name: recipientName,
           phone: recipientPhone,
         },
