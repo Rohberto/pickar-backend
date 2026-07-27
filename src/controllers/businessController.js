@@ -3,6 +3,7 @@ const Delivery = require('../models/Delivery');
 const Business = require('../models/Business');
 const { getRideType } = require('../config/rideTypes');
 const { BUSINESS_PLANS, getPlan } = require('../config/businessPlans');
+const { matchDriver } = require('../services/matchingService');
 
 // @desc    List available subscription plans
 // @route   GET /api/business/plans
@@ -14,14 +15,24 @@ exports.getPlans = async (req, res) => {
 // @desc    Create a batch of deliveries in one request
 // @route   POST /api/business/orders/batch
 // @access  Private (business, approved + active)
-// @body    { orders: [{ pickupAddress, recipientAddress, recipientName, recipientPhone, packageType, rideType }] }
+// @body    { orders: [{
+//   pickupAddress, pickupCoordinates?: {lat,lng},
+//   recipientAddress, recipientCoordinates?: {lat,lng},
+//   recipientName, recipientPhone, packageType, rideType
+// }] }
 //
-// IMPORTANT — what this does NOT do yet:
-// It does not charge the business. There's no Business wallet or Paystack
-// billing wired up for per-delivery charges (Wallet is a User-only model
-// right now). Orders are created with status 'pending_payment' so nothing
-// fake happens — you'll need to decide how businesses pay (invoice at
-// month-end vs. pay-per-batch) before these can flow into matchDriver().
+// Businesses already pay via their monthly subscription (gated by
+// requireActiveBusiness before this handler runs) — there is no separate
+// per-order charge, so orders go straight to matching, same as a consumer
+// delivery after wallet debit.
+//
+// COORDINATES CAVEAT: matchDriver() needs pickupAddress.coordinates to find
+// nearby drivers. The current booking form only collects free-text
+// addresses, so pickupCoordinates/recipientCoordinates will usually be
+// missing. Orders without coordinates are created but NOT sent to
+// matchDriver() — they're left at 'pending' rather than crashing or silently
+// pretending to search. Wiring up an address autocomplete (Google Places)
+// on the booking form so it captures lat/lng is the real fix.
 exports.createBatchOrder = async (req, res) => {
   try {
     const { orders } = req.body;
@@ -57,7 +68,9 @@ exports.createBatchOrder = async (req, res) => {
       const o = orders[i];
       const {
         pickupAddress,
+        pickupCoordinates,
         recipientAddress,
+        recipientCoordinates,
         recipientName,
         recipientPhone,
         packageType,
@@ -86,10 +99,22 @@ exports.createBatchOrder = async (req, res) => {
         });
       }
 
+      const hasCoordinates =
+        pickupCoordinates?.lat != null && pickupCoordinates?.lng != null;
+
       validated.push({
-        pickupAddress: { label: pickupAddress },
+        pickupAddress: {
+          label: pickupAddress,
+          coordinates: hasCoordinates ? pickupCoordinates : undefined,
+        },
         recipient: {
-          address: { label: recipientAddress },
+          address: {
+            label: recipientAddress,
+            coordinates:
+              recipientCoordinates?.lat != null && recipientCoordinates?.lng != null
+                ? recipientCoordinates
+                : undefined,
+          },
           name: recipientName,
           phone: recipientPhone,
         },
@@ -97,7 +122,10 @@ exports.createBatchOrder = async (req, res) => {
         rideType,
         price: rideConfig.discountedPrice,
         agreedToInsurance: true,
-        status: 'pending_payment',
+        // No coordinates yet → leave at 'pending' so matchDriver isn't called
+        // on an address it can't search from. Has coordinates → straight to
+        // 'finding_driver', matched right after insertMany below.
+        status: hasCoordinates ? 'finding_driver' : 'pending',
         business: req.business._id,
         createdByBusinessUser: req.businessUser._id,
         trackingToken: nanoid(10),
@@ -110,9 +138,19 @@ exports.createBatchOrder = async (req, res) => {
       $inc: { deliveriesThisCycle: created.length },
     });
 
+    // Kick off matching for every order that has coordinates
+    const io = req.app.get('io');
+    const readyForMatching = created.filter((d) => d.status === 'finding_driver');
+    readyForMatching.forEach((delivery) => matchDriver(delivery._id, io));
+
+    const skippedCount = created.length - readyForMatching.length;
+
     res.status(201).json({
       success: true,
-      message: `${created.length} orders created`,
+      message:
+        skippedCount > 0
+          ? `${created.length} orders created. ${skippedCount} are missing map coordinates and are waiting — matching hasn't started for those yet.`
+          : `${created.length} orders created and matching has started.`,
       data: created,
     });
   } catch (err) {
