@@ -31,20 +31,25 @@ exports.signup = async (req, res) => {
       residentialAddress,
     } = req.body;
 
-    // Check if user exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email already registered',
-      });
+      if (existingUser.isVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email already registered',
+        });
+      }
+
+      // Unverified account from a previous incomplete attempt — safe to
+      // discard so they can retry cleanly instead of being stuck.
+      const Driver = require('../models/driver');
+      await Driver.deleteOne({ user: existingUser._id });
+      await User.findByIdAndDelete(existingUser._id);
     }
 
-    // Generate OTP
     const otp = generateOTP();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    // Create user
     const userData = {
       fullName,
       email,
@@ -55,18 +60,16 @@ exports.signup = async (req, res) => {
       otpExpires,
     };
 
-    // Add Cloudinary URLs for driver documents
     if (userType === 'driver') {
       if (req.files) {
         if (req.files.idDocument && req.files.idDocument[0]) {
-          userData.idDocument = req.files.idDocument[0].path; // Cloudinary URL
+          userData.idDocument = req.files.idDocument[0].path;
         }
         if (req.files.proofOfAddress && req.files.proofOfAddress[0]) {
-          userData.proofOfAddress = req.files.proofOfAddress[0].path; // Cloudinary URL
+          userData.proofOfAddress = req.files.proofOfAddress[0].path;
         }
       }
 
-      // Validate that driver uploaded required documents
       if (!userData.idDocument || !userData.proofOfAddress) {
         return res.status(400).json({
           success: false,
@@ -77,24 +80,6 @@ exports.signup = async (req, res) => {
 
     const user = await User.create(userData);
 
-    // Send OTP email
-    try {
-      await sendOTPEmail(email, otp, fullName);
-    } catch (emailError) {
-      console.error('Email sending failed:', emailError);
-      // Delete user if email fails
-      await User.findByIdAndDelete(user._id);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to send verification email. Please try again.',
-      });
-    }
-
-    // Create the Driver profile now — collects nationality/state of
-    // origin/residential address at signup instead of leaving them
-    // for a later profile-edit step. Placed after the email send
-    // succeeds so a failed email (which deletes the User above)
-    // never leaves an orphaned Driver record behind.
     if (userType === 'driver') {
       const Driver = require('../models/driver');
       await Driver.create({
@@ -107,11 +92,16 @@ exports.signup = async (req, res) => {
         residentialAddress: residentialAddress || null,
         location: {
           type: 'Point',
-          coordinates: [3.3792, 6.5244], // default Lagos coords until they go online
+          coordinates: [3.3792, 6.5244],
         },
       });
     }
 
+    // Respond to the client immediately — the account exists and is
+    // usable (pending verification) regardless of whether the email
+    // send below succeeds. Email delivery is best-effort and retryable
+    // via /auth/resend-otp; it should never be a reason to lose the
+    // account or leave the client hanging.
     res.status(201).json({
       success: true,
       message: 'Registration successful. Please check your email for OTP.',
@@ -126,6 +116,14 @@ exports.signup = async (req, res) => {
         },
       },
     });
+
+    // Fire the OTP email after responding — a slow/down SMTP server can
+    // no longer block or break the signup response.
+    try {
+      await sendOTPEmail(email, otp, fullName);
+    } catch (emailError) {
+      console.error('OTP email failed to send (user can retry via resend-otp):', emailError);
+    }
   } catch (error) {
     console.error('Signup error:', error);
     res.status(500).json({
@@ -224,48 +222,73 @@ exports.verifyOTP = async (req, res) => {
 // @desc    Resend OTP
 // @route   POST /api/auth/resend-otp
 // @access  Public
+// @desc    Resend OTP verification code
+// @route   POST /api/auth/resend-otp
+// @access  Public
 exports.resendOTP = async (req, res) => {
   try {
     const { email } = req.body;
 
-    const user = await User.findOne({ email });
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required',
+      });
+    }
+
+    const user = await User.findOne({ email }).select('+otp +otpExpires');
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found',
+        message: 'No account found with this email',
       });
     }
 
     if (user.isVerified) {
       return res.status(400).json({
         success: false,
-        message: 'Account already verified',
+        message: 'This account is already verified',
       });
     }
 
-    // Generate new OTP
+    // Basic cooldown — otpExpires is set 10 minutes out when a code is
+    // issued, so if more than 9 of those 10 minutes are still remaining,
+    // the last code was sent less than a minute ago. Prevents rapid-fire
+    // resend spam without needing a separate rate-limit field/table.
+    const msRemaining = user.otpExpires ? user.otpExpires.getTime() - Date.now() : 0;
+    if (msRemaining > 9 * 60 * 1000) {
+      const secondsLeft = Math.ceil((msRemaining - 9 * 60 * 1000) / 1000);
+      return res.status(429).json({
+        success: false,
+        message: `Please wait ${secondsLeft}s before requesting another code`,
+      });
+    }
+
     const otp = generateOTP();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     user.otp = otp;
     user.otpExpires = otpExpires;
-    await user.save();
+    await user.save({ validateBeforeSave: false });
 
-    // Send OTP email
+    // Unlike signup, this is deliberately awaited before responding —
+    // the entire purpose of this endpoint is "did a new code go out",
+    // so silently succeeding on a failed send would leave the user
+    // stuck exactly the way the original bug did.
     try {
       await sendOTPEmail(email, otp, user.fullName);
     } catch (emailError) {
-      console.error('Email sending failed:', emailError);
+      console.error('Resend OTP email failed:', emailError);
       return res.status(500).json({
         success: false,
-        message: 'Failed to send verification email. Please try again.',
+        message: 'Failed to send verification email. Please try again shortly.',
       });
     }
 
     res.status(200).json({
       success: true,
-      message: 'OTP sent successfully',
+      message: 'A new verification code has been sent to your email.',
     });
   } catch (error) {
     console.error('Resend OTP error:', error);
