@@ -20,9 +20,9 @@ const userSchema = new mongoose.Schema(
       required: [true, 'Please provide your phone number'],
     },
     photo: {
-  type: String,
-  default: null,
-},
+      type: String,
+      default: null,
+    },
     password: {
       type: String,
       required: [true, 'Please provide a password'],
@@ -50,11 +50,15 @@ const userSchema = new mongoose.Schema(
     // Driver specific
     idDocument: String,
     proofOfAddress: String,
+    vehicleDocument: {
+      type: String,
+      default: null,
+    },
     isApproved: {
       type: Boolean,
       default: false,
     },
-     // ── Admin-managed fields ──────────────────────────────────────────────────
+    // ── Admin-managed fields ──────────────────────────────────────────────────
     isSuspended: {
       type: Boolean,
       default: false,
@@ -83,7 +87,6 @@ userSchema.pre('save', async function () {
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
 });
-
 
 // Compare password method
 userSchema.methods.comparePassword = async function (candidatePassword) {

@@ -2,6 +2,7 @@ const Delivery = require('../models/Delivery');
 const { matchDriver } = require('../services/matchingService');
 const { debitWallet } = require('../services/walletService');
 const { releaseEscrowToDriver, refundEscrow } = require('../services/walletService');
+const { notifyDelivery } = require('../utils/notifyDelivery');
 
 // Pricing config per ride type (can move to DB later)
 const RIDE_TYPES = [
@@ -295,10 +296,10 @@ exports.driverArrived = async (req, res) => {
     );
     console.log(`[driverArrived] Updated delivery status to driver_arrived for delivery ${req.params.id}`);
     if (!delivery) return res.status(404).json({ success: false, message: 'Delivery not found' });
- console.log(`[driverArrived] Emitting to user_${delivery.user}`);
-    // Notify user via socket
+
+    // Notify user/business via socket
     const io = req.app.get('io');
-    io.to(`user_${delivery.user}`).emit('driver_arrived', {
+    notifyDelivery(io, delivery, 'driver_arrived', {
       deliveryId: delivery._id,
     });
 
@@ -329,9 +330,9 @@ exports.verifyPickupCode = async (req, res) => {
       deliveryCode,
     });
 
-    // Notify user package has been picked up
+    // Notify user/business package has been picked up
     const io = req.app.get('io');
-    io.to(`user_${delivery.user}`).emit('package_picked_up', {
+    notifyDelivery(io, delivery, 'package_picked_up', {
       deliveryId: delivery._id,
       deliveryCode,
       pickupTime: new Date().toISOString(),
@@ -380,9 +381,9 @@ await releaseEscrowToDriver({ userId: delivery.user, driverId: delivery.driver, 
       await Driver.findByIdAndUpdate(driverId, { status: 'online' });
     }
 
-    // Notify user delivery is complete
+    // Notify user/business delivery is complete
     const io = req.app.get('io');
-    io.to(`user_${delivery.user}`).emit('package_delivered', {
+    notifyDelivery(io, delivery, 'package_delivered', {
       deliveryId: delivery._id,
     });
 
@@ -439,7 +440,7 @@ exports.assignDriver = async (req, res) => {
       : null;
 
     const io = req.app.get('io');
-    io.to(`user_${delivery.user}`).emit('driver_assigned', {
+    notifyDelivery(io, delivery, 'driver_assigned', {
       deliveryId: delivery._id,
       driver: {
         _id: driver._id,
@@ -489,11 +490,3 @@ exports.cancelStuck = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
-
-
-// ─────────────────────────────────────────────────────────────────
-// ADD TO: src/routes/delivery.js
-// (alongside your other delivery routes)
-// ─────────────────────────────────────────────────────────────────
-
-// router.post('/cancel-stuck', protect, deliveryController.cancelStuck);

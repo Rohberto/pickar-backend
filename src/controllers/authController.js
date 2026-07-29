@@ -20,7 +20,16 @@ const generateToken = (id) => {
 // @access  Public
 exports.signup = async (req, res) => {
   try {
-    const { fullName, email, phone, password, userType } = req.body;
+    const {
+      fullName,
+      email,
+      phone,
+      password,
+      userType,
+      nationality,
+      stateOfOrigin,
+      residentialAddress,
+    } = req.body;
 
     // Check if user exists
     const existingUser = await User.findOne({ email });
@@ -78,6 +87,28 @@ exports.signup = async (req, res) => {
       return res.status(500).json({
         success: false,
         message: 'Failed to send verification email. Please try again.',
+      });
+    }
+
+    // Create the Driver profile now — collects nationality/state of
+    // origin/residential address at signup instead of leaving them
+    // for a later profile-edit step. Placed after the email send
+    // succeeds so a failed email (which deletes the User above)
+    // never leaves an orphaned Driver record behind.
+    if (userType === 'driver') {
+      const Driver = require('../models/driver');
+      await Driver.create({
+        user: user._id,
+        name: user.fullName,
+        phone: user.phone,
+        status: 'offline',
+        nationality: nationality || null,
+        stateOfOrigin: stateOfOrigin || null,
+        residentialAddress: residentialAddress || null,
+        location: {
+          type: 'Point',
+          coordinates: [3.3792, 6.5244], // default Lagos coords until they go online
+        },
       });
     }
 

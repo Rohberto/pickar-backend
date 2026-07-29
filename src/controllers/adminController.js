@@ -516,7 +516,7 @@ exports.getDriverById = async (req, res) => {
   try {
     const driver = await Driver.findById(req.params.id).populate(
       'user',
-      'fullName email phone isApproved isSuspended idDocument proofOfAddress createdAt'
+      'fullName email phone isApproved isSuspended idDocument proofOfAddress vehicleDocument createdAt'
     );
 
     if (!driver) {
@@ -557,6 +557,10 @@ exports.getDriverById = async (req, res) => {
           isSuspended: driver.user.isSuspended,
           idDocument: driver.user.idDocument,
           proofOfAddress: driver.user.proofOfAddress,
+          vehicleDocument: driver.user.vehicleDocument,
+          nationality: driver.nationality,
+          stateOfOrigin: driver.stateOfOrigin,
+          residentialAddress: driver.residentialAddress,
           createdAt: driver.user.createdAt,
         },
         stats: {

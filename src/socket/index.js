@@ -3,6 +3,7 @@ const Delivery = require('../models/Delivery');
 const User = require('../models/user');
 const ChatMessage = require('../models/ChatMessage');
 const { Expo } = require('expo-server-sdk');
+const { notifyDelivery } = require('../utils/notifyDelivery');
  
 const expoClient = new Expo();
  
@@ -37,6 +38,17 @@ const initSocket = (io) => {
   if (userId) {
     socket.join(`user_${userId}`);
     console.log(`User ${userId} joined room user_${userId}`);
+  }
+});
+
+// Business dispatcher joins their business's room so delivery lifecycle
+// events (driver found/assigned/arrived, picked up, delivered) reach the
+// dashboard. Mirrors join_user_room above.
+socket.on('join_business_room', (data) => {
+  const businessId = typeof data === 'object' ? data.businessId : data;
+  if (businessId) {
+    socket.join(`business_${businessId}`);
+    console.log(`Business ${businessId} joined room business_${businessId}`);
   }
 });
 
@@ -97,7 +109,7 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
       });
 
       if (delivery) {
-        io.to(`user_${delivery.user}`).emit('driver_location', {
+        notifyDelivery(io, delivery, 'driver_location', {
           location: { lat, lng },
           deliveryId: delivery._id,
         });
@@ -136,7 +148,7 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
         { new: true }
       );
       if (delivery) {
-        io.to(`user_${delivery.user}`).emit('package_picked_up', {
+        notifyDelivery(io, delivery, 'package_picked_up', {
           deliveryId,
           deliveryCode: delivery.deliveryCode,
           pickupTime: new Date().toISOString(),
@@ -161,7 +173,7 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
         if (driverId) {
           await Driver.findByIdAndUpdate(driverId, { status: 'online' });
         }
-        io.to(`user_${delivery.user}`).emit('package_delivered', { deliveryId });
+        notifyDelivery(io, delivery, 'package_delivered', { deliveryId });
       }
     });
 

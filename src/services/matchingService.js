@@ -1,5 +1,6 @@
 const Driver = require('../models/driver');
 const Delivery = require('../models/Delivery');
+const { notifyDelivery } = require('../utils/notifyDelivery');
 
 const SEARCH_RADIUS_METERS = 50000; // 50km for testing — reduce to 5000 for production
 const OFFER_TIMEOUT_MS = 30000;     // 30 seconds per driver (increased from 15)
@@ -10,7 +11,8 @@ const MAX_CANDIDATES = 5;
  */
 const matchDriver = async (deliveryId, io) => {
   const delivery = await Delivery.findById(deliveryId)
-    .populate('user', 'fullName photo phone');
+    .populate('user', 'fullName photo phone')
+    .populate('business', '_id');
   if (!delivery) return;
 
   const [lng, lat] = [
@@ -45,7 +47,7 @@ const matchDriver = async (deliveryId, io) => {
     // Keep as finding_driver NOT pending/cancelled — user can retry from home screen
     await Delivery.findByIdAndUpdate(deliveryId, { status: 'finding_driver' });
 
-    io.to(`user_${delivery.user._id}`).emit('no_drivers_available', {
+    notifyDelivery(io, delivery, 'no_drivers_available', {
       deliveryId,
       canRetry: true,
       message: delivery.rideType === 'truck'
@@ -73,7 +75,7 @@ const offerToNext = (delivery, candidates, index, io) => {
       // Keep as finding_driver so user can retry — don't cancel
       await Delivery.findByIdAndUpdate(delivery._id, { status: 'finding_driver' });
 
-      io.to(`user_${delivery.user._id ?? delivery.user}`).emit('no_drivers_available', {
+      notifyDelivery(io, delivery, 'no_drivers_available', {
         deliveryId: delivery._id,
         canRetry: true,
         message: delivery.rideType === 'truck'
@@ -110,7 +112,7 @@ const offerToNext = (delivery, candidates, index, io) => {
     });
 
     // Notify user we found a candidate
-    io.to(`user_${delivery.user._id ?? delivery.user}`).emit('connecting_to_driver', {
+    notifyDelivery(io, delivery, 'connecting_to_driver', {
       deliveryId: delivery._id,
       attempt: index + 1,
     });
@@ -177,7 +179,7 @@ const handleAccepted = async (delivery, driver, io) => {
 
   // Notify user — works even if they navigated away since home screen
   // polls checkActiveDelivery on focus and will show a "Driver Found!" alert
-  io.to(`user_${delivery.user._id ?? delivery.user}`).emit('driver_assigned', {
+  notifyDelivery(io, delivery, 'driver_assigned', {
     deliveryId: delivery._id,
     driver: {
       _id: driver._id,
