@@ -86,7 +86,7 @@ const buildOTPEmailHtml = (otp, name) => `
 
 const sendOTPEmail = async (email, otp, name) => {
   const { error } = await resend.emails.send({
-    from: process.env.EMAIL_FROM || 'Pickar <onboarding@resend.dev>',
+    from: process.env.EMAIL_FROM || 'Pickar <hello@usepickar.com>',
     to: email,
     subject: 'Pickar - Email Verification',
     html: buildOTPEmailHtml(otp, name),
