@@ -3,43 +3,8 @@ const { matchDriver } = require('../services/matchingService');
 const { debitWallet } = require('../services/walletService');
 const { releaseEscrowToDriver, refundEscrow } = require('../services/walletService');
 const { notifyDelivery } = require('../utils/notifyDelivery');
-
-// Pricing config per ride type (can move to DB later)
-const RIDE_TYPES = [
-  {
-    type: 'truck',
-    label: 'Truck',
-    description: 'Best for house loads',
-    basePrice: 8500,
-    discountedPrice: 6000,
-    eta: 11,
-  },
-  {
-    type: 'standard',
-    label: 'Standard',
-    description: 'Regular bike delivery',
-    basePrice: 8500,
-    discountedPrice: 6000,
-    eta: 5,
-  },
-  {
-    type: 'eco_send',
-    label: 'Eco Send',
-    description: 'Budget-friendly option',
-    basePrice: 8500,
-    discountedPrice: 6000,
-    eta: 5,
-  },
-  {
-    type: 'express',
-    label: 'Express',
-    description: 'Delivers quickly',
-    basePrice: 8500,
-    discountedPrice: 6000,
-    eta: null,
-  },
-];
-
+const { calculateAllFares, calculateFare } = require('../services/pricingService');
+const { RIDE_TYPES } = require('../config/rideTypes');
 
 // POST /api/deliveries/initiate
 exports.initiateDelivery = async (req, res) => {
@@ -100,22 +65,46 @@ exports.initiateDelivery = async (req, res) => {
 // Frontend calls this to display the "Choose a ride" screen
 exports.getRideOptions = async (req, res) => {
   try {
-    // Future: accept ?fromLat=&fromLng=&toLat=&toLng= 
-    // and calculate dynamic pricing via Google Maps Distance Matrix API
-    res.status(200).json({
-      success: true,
-      data: RIDE_TYPES,
+    const { deliveryId, weightKg } = req.query;
+
+    let pickupCoords, dropoffCoords;
+
+    if (deliveryId) {
+      const delivery = await Delivery.findById(deliveryId);
+      if (!delivery) {
+        return res.status(404).json({ success: false, message: 'Delivery not found' });
+      }
+      pickupCoords = delivery.pickupAddress.coordinates;
+      dropoffCoords = delivery.recipient.address.coordinates;
+    } else {
+      // Fallback: allow direct coords in query for a pre-delivery quote screen
+      const { fromLat, fromLng, toLat, toLng } = req.query;
+      if (!fromLat || !fromLng || !toLat || !toLng) {
+        return res.status(400).json({
+          success: false,
+          message: 'deliveryId or fromLat/fromLng/toLat/toLng is required',
+        });
+      }
+      pickupCoords = { lat: parseFloat(fromLat), lng: parseFloat(fromLng) };
+      dropoffCoords = { lat: parseFloat(toLat), lng: parseFloat(toLng) };
+    }
+
+    const fares = calculateAllFares({
+      pickupCoords,
+      dropoffCoords,
+      weightKg: weightKg ? parseFloat(weightKg) : 1,
     });
+
+    res.status(200).json({ success: true, data: fares });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-
 // POST /api/deliveries/:id/select-ride
 exports.selectRide = async (req, res) => {
   try {
-    const { rideType } = req.body;
+    const { rideType, weightKg } = req.body;
 
     const validTypes = RIDE_TYPES.map((r) => r.type);
     if (!validTypes.includes(rideType)) {
@@ -125,37 +114,40 @@ exports.selectRide = async (req, res) => {
       });
     }
 
-    const selected = RIDE_TYPES.find((r) => r.type === rideType);
+    const existing = await Delivery.findOne({ _id: req.params.id, user: req.user._id });
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Delivery not found' });
+    }
+
+    const fare = calculateFare({
+      pickupCoords: existing.pickupAddress.coordinates,
+      dropoffCoords: existing.recipient.address.coordinates,
+      weightKg: weightKg ? parseFloat(weightKg) : 1,
+      rideType,
+    });
 
     const delivery = await Delivery.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
       {
         rideType,
-        price: selected.discountedPrice,
-        estimatedArrival: selected.eta,
+        price: fare.total,
+        fareBreakdown: fare.breakdown,
+        distanceKm: fare.distanceKm,
+        pickupZone: fare.pickupZone,
+        dropoffZone: fare.dropoffZone,
+        weightKg: weightKg ? parseFloat(weightKg) : 1,
+        estimatedArrival: fare.eta,
         status: 'finding_driver',
       },
       { new: true }
     );
 
-    if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        message: 'Delivery not found',
-      });
-    }
-
-    // Respond to client immediately — don't await matchDriver
-    // matchDriver runs in the background and notifies via socket
     res.status(200).json({ success: true, data: delivery });
 
-    // Trigger driver matching — works for all ride types including truck
-    const { matchDriver } = require('../services/matchingService');
     const io = req.app.get('io');
     matchDriver(delivery._id, io).catch((err) =>
       console.error('[selectRide] matchDriver error:', err)
     );
-
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
