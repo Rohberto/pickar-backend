@@ -5,6 +5,7 @@ const { releaseEscrowToDriver, refundEscrow } = require('../services/walletServi
 const { notifyDelivery } = require('../utils/notifyDelivery');
 const { calculateAllFares, calculateFare } = require('../services/pricingService');
 const { RIDE_TYPES } = require('../config/rideTypes');
+const { nanoid } = require('nanoid');
 
 // POST /api/deliveries/initiate
 exports.initiateDelivery = async (req, res) => {
@@ -48,6 +49,7 @@ exports.initiateDelivery = async (req, res) => {
       },
       packageType,
       agreedToInsurance,
+      trackingToken: nanoid(10),
     });
 
     res.status(201).json({
