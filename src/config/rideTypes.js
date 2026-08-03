@@ -12,6 +12,7 @@ const RIDE_TYPES = [
     perKmRate: 180,
     perKgRate: 200,
     freeKgThreshold: 3,
+    maxWeightKg: 25,
     eta: 5,
   },
   {
@@ -23,6 +24,7 @@ const RIDE_TYPES = [
     perKmRate: 140,
     perKgRate: 180,
     freeKgThreshold: 3,
+    maxWeightKg: 25,
     scheduledDiscountPercent: 25, // cheaper because riders batch these
     eta: 5,
   },
@@ -35,6 +37,7 @@ const RIDE_TYPES = [
     perKmRate: 220,
     perKgRate: 220,
     freeKgThreshold: 3,
+    maxWeightKg: 25,
     expressPremiumPercent: 40, // urgency premium
     eta: null,
   },
@@ -47,6 +50,7 @@ const RIDE_TYPES = [
     perKmRate: 350,
     perKgRate: 100,
     freeKgThreshold: 50,
+    maxWeightKg: 1000, // effectively no cap at this stage
     eta: 11,
   },
 ];

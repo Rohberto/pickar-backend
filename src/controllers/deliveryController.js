@@ -16,6 +16,7 @@ exports.initiateDelivery = async (req, res) => {
       recipientName,
       recipientPhone,
       packageType,
+      weightKg,
       agreedToInsurance,
     } = req.body;
 
@@ -48,6 +49,7 @@ exports.initiateDelivery = async (req, res) => {
         phone: recipientPhone,
       },
       packageType,
+      weightKg: weightKg ? parseFloat(weightKg) : 1,
       agreedToInsurance,
       trackingToken: nanoid(10),
     });
@@ -67,9 +69,9 @@ exports.initiateDelivery = async (req, res) => {
 // Frontend calls this to display the "Choose a ride" screen
 exports.getRideOptions = async (req, res) => {
   try {
-    const { deliveryId, weightKg } = req.query;
+    const { deliveryId } = req.query;
 
-    let pickupCoords, dropoffCoords;
+    let pickupCoords, dropoffCoords, weightKg;
 
     if (deliveryId) {
       const delivery = await Delivery.findById(deliveryId);
@@ -78,8 +80,10 @@ exports.getRideOptions = async (req, res) => {
       }
       pickupCoords = delivery.pickupAddress.coordinates;
       dropoffCoords = delivery.recipient.address.coordinates;
+      weightKg = delivery.weightKg ?? 1; // weight now travels with the delivery doc
     } else {
       // Fallback: allow direct coords in query for a pre-delivery quote screen
+      // (no delivery doc exists yet, so no stored weight — defaults to 1kg)
       const { fromLat, fromLng, toLat, toLng } = req.query;
       if (!fromLat || !fromLng || !toLat || !toLng) {
         return res.status(400).json({
@@ -89,13 +93,10 @@ exports.getRideOptions = async (req, res) => {
       }
       pickupCoords = { lat: parseFloat(fromLat), lng: parseFloat(fromLng) };
       dropoffCoords = { lat: parseFloat(toLat), lng: parseFloat(toLng) };
+      weightKg = 1;
     }
 
-    const fares = calculateAllFares({
-      pickupCoords,
-      dropoffCoords,
-      weightKg: weightKg ? parseFloat(weightKg) : 1,
-    });
+    const fares = calculateAllFares({ pickupCoords, dropoffCoords, weightKg });
 
     res.status(200).json({ success: true, data: fares });
   } catch (err) {
@@ -106,7 +107,7 @@ exports.getRideOptions = async (req, res) => {
 // POST /api/deliveries/:id/select-ride
 exports.selectRide = async (req, res) => {
   try {
-    const { rideType, weightKg } = req.body;
+    const { rideType } = req.body;
 
     const validTypes = RIDE_TYPES.map((r) => r.type);
     if (!validTypes.includes(rideType)) {
@@ -124,7 +125,7 @@ exports.selectRide = async (req, res) => {
     const fare = calculateFare({
       pickupCoords: existing.pickupAddress.coordinates,
       dropoffCoords: existing.recipient.address.coordinates,
-      weightKg: weightKg ? parseFloat(weightKg) : 1,
+      weightKg: existing.weightKg ?? 1,
       rideType,
     });
 
@@ -137,7 +138,6 @@ exports.selectRide = async (req, res) => {
         distanceKm: fare.distanceKm,
         pickupZone: fare.pickupZone,
         dropoffZone: fare.dropoffZone,
-        weightKg: weightKg ? parseFloat(weightKg) : 1,
         estimatedArrival: fare.eta,
         status: 'finding_driver',
       },

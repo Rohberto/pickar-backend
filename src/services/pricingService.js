@@ -21,6 +21,12 @@ function calculateFare({ pickupCoords, dropoffCoords, weightKg = 1, rideType }) 
   const rateCard = RIDE_TYPES.find((r) => r.type === rideType);
   if (!rateCard) throw new Error(`Unknown ride type: ${rideType}`);
 
+  if (weightKg > rateCard.maxWeightKg) {
+    throw new Error(
+      `${rateCard.label} has a ${rateCard.maxWeightKg}kg limit — this package is too heavy for this ride type`
+    );
+  }
+
   const distanceKm = calcDistanceKm(pickupCoords, dropoffCoords);
 
   const pickupZone = getZoneForPoint(pickupCoords.lat, pickupCoords.lng);
@@ -73,8 +79,11 @@ function calculateFare({ pickupCoords, dropoffCoords, weightKg = 1, rideType }) 
   };
 }
 
+// Only prices ride types the package actually qualifies for by weight —
+// e.g. a 30kg package will only ever get a Truck quote, not four options
+// where three of them would throw on select-ride.
 function calculateAllFares({ pickupCoords, dropoffCoords, weightKg = 1 }) {
-  return RIDE_TYPES.map((r) =>
+  return RIDE_TYPES.filter((r) => weightKg <= r.maxWeightKg).map((r) =>
     calculateFare({ pickupCoords, dropoffCoords, weightKg, rideType: r.type })
   );
 }
