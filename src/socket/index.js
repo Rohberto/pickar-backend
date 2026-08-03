@@ -4,6 +4,7 @@ const User = require('../models/user');
 const ChatMessage = require('../models/ChatMessage');
 const { Expo } = require('expo-server-sdk');
 const { notifyDelivery } = require('../utils/notifyDelivery');
+const { matchWaitingDeliveryForDriver } = require('../services/matchingService');
  
 const expoClient = new Expo();
  
@@ -82,6 +83,14 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
   });
   socket.join(`driver_${driverId}`);
   console.log(`Driver ${driverId} is online`);
+
+  // This driver might be exactly what a waiting delivery needs — check
+  // for a compatible delivery stuck in finding_driver and retry matching
+  // for it. Without this, a delivery created before any driver was
+  // online would never be seen by a driver who logs on afterward.
+  matchWaitingDeliveryForDriver(driverId, io).catch((err) =>
+    console.error('[driver_online] matchWaitingDeliveryForDriver error:', err)
+  );
 });
 
     // Driver goes offline — clear socketId so matchDriver skips them.

@@ -484,3 +484,31 @@ exports.cancelStuck = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+// POST /api/deliveries/:id/find-driver
+// Manual retry — this is what the "Keep Searching" button on
+// finding-driver.tsx has been calling all along with no backend to hit.
+exports.retryFindDriver = async (req, res) => {
+  try {
+    const delivery = await Delivery.findOne({ _id: req.params.id, user: req.user._id });
+    if (!delivery) {
+      return res.status(404).json({ success: false, message: 'Delivery not found' });
+    }
+    if (delivery.status !== 'finding_driver') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot retry — delivery is currently ${delivery.status}`,
+      });
+    }
+
+    res.json({ success: true, message: 'Searching for a driver again...' });
+
+    const io = req.app.get('io');
+    const { matchDriver } = require('../services/matchingService');
+    matchDriver(delivery._id, io).catch((err) =>
+      console.error('[retryFindDriver] matchDriver error:', err)
+    );
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
