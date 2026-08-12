@@ -128,6 +128,7 @@ const deliverySchema = new mongoose.Schema(
         'pending',
         'pending_payment', // business batch orders start here until billing is wired up
         'finding_driver',
+            'ride_selected',   
         'no_driver_found',  // overall search window elapsed with no match — terminal until user retries
         'driver_assigned',
         'driver_arrived',

@@ -129,6 +129,11 @@ exports.selectRide = async (req, res) => {
       rideType,
     });
 
+    // Status stops at ride_selected here — NOT finding_driver. Matching
+    // only starts once the user actually reaches the finding-driver
+    // screen and calls start-search below. This closes the race where a
+    // fast driver could be offered and accept a trip before the user's
+    // app had even navigated to the screen that shows it happening.
     const delivery = await Delivery.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
       {
@@ -139,16 +144,43 @@ exports.selectRide = async (req, res) => {
         pickupZone: fare.pickupZone,
         dropoffZone: fare.dropoffZone,
         estimatedArrival: fare.eta,
-        status: 'finding_driver',
+        status: 'ride_selected',
       },
       { new: true }
     );
 
     res.status(200).json({ success: true, data: delivery });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/deliveries/:id/start-search
+// Called by finding-driver.tsx on mount — this, not select-ride, is what
+// actually kicks off matchDriver. Idempotent: if search already started
+// (or the delivery has moved past finding_driver), it's a no-op so a
+// remount or slow double-tap can't trigger two parallel searches.
+exports.startSearch = async (req, res) => {
+  try {
+    const delivery = await Delivery.findOne({ _id: req.params.id, user: req.user._id });
+    if (!delivery) {
+      return res.status(404).json({ success: false, message: 'Delivery not found' });
+    }
+
+    if (delivery.status === 'ride_selected') {
+      await Delivery.findByIdAndUpdate(delivery._id, { status: 'finding_driver' });
+    } else if (delivery.status !== 'finding_driver') {
+      // Already past this point (assigned, delivered, cancelled, etc.) —
+      // nothing to start, just report current state back.
+      return res.json({ success: true, data: delivery, alreadyStarted: true });
+    }
+
+    res.json({ success: true, message: 'Searching for a driver...' });
 
     const io = req.app.get('io');
+    const { matchDriver } = require('../services/matchingService');
     matchDriver(delivery._id, io).catch((err) =>
-      console.error('[selectRide] matchDriver error:', err)
+      console.error('[startSearch] matchDriver error:', err)
     );
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

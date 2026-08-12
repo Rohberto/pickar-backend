@@ -16,7 +16,8 @@ const {
   getActiveDelivery,
   assignDriver,
   cancelStuck,
-  retryFindDriver
+  retryFindDriver,
+  startSearch
 } = require('../controllers/deliveryController');
 const { rateDelivery } = require('../controllers/ratingControllers');
 
@@ -76,6 +77,7 @@ router.post('/:id/rate', protect, rateDelivery);
 router.post('/cancel-stuck', protect, cancelStuck);
 
 router.post('/:id/find-driver', protect, retryFindDriver);
+router.post('/:id/start-search', protect, startSearch);
 
 
 module.exports = router;

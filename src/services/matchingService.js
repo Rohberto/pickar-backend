@@ -23,94 +23,96 @@ const matchDriver = async (deliveryId, io) => {
   );
   if (!claimed) return; // already being matched right now, or not in a matchable state
 
-  const delivery = await Delivery.findById(deliveryId)
-    .populate('user', 'fullName photo phone')
-    .populate('business', '_id');
+  // Everything from here down is wrapped in try/finally — no matter what
+  // throws, times out, or returns early, matchingInProgress ALWAYS gets
+  // reset to false at the end. Previously this was reset manually at each
+  // exit point, which meant any unexpected throw left the flag stuck at
+  // true forever — silently blocking every future retry and every
+  // driver-comes-online trigger for that delivery, with zero error shown
+  // anywhere. This was the root cause of "select ride does nothing" and
+  // "driver coming online doesn't auto-match."
+  try {
+    const delivery = await Delivery.findById(deliveryId)
+      .populate('user', 'fullName photo phone')
+      .populate('business', '_id');
 
-  if (!delivery) {
-    await Delivery.findByIdAndUpdate(deliveryId, { matchingInProgress: false }).catch(() => {});
-    return;
-  }
+    if (!delivery) return;
 
-  // First time this delivery starts searching — stamp when the clock began.
-  // Retries must NOT reset this, or a delivery could search forever in
-  // short bursts without ever hitting the overall cap.
-  if (!delivery.searchStartedAt) {
-    delivery.searchStartedAt = new Date();
-    await Delivery.findByIdAndUpdate(deliveryId, { searchStartedAt: delivery.searchStartedAt });
-  }
+    // First time this delivery starts searching — stamp when the clock
+    // began. Retries must NOT reset this, or a delivery could search
+    // forever in short bursts without ever hitting the overall cap.
+    if (!delivery.searchStartedAt) {
+      delivery.searchStartedAt = new Date();
+      await Delivery.findByIdAndUpdate(deliveryId, { searchStartedAt: delivery.searchStartedAt });
+    }
 
-  const searchElapsedMs = Date.now() - new Date(delivery.searchStartedAt).getTime();
-  if (searchElapsedMs > MAX_SEARCH_DURATION_MS) {
-    await Delivery.findByIdAndUpdate(deliveryId, {
-      status: 'no_driver_found',
-      matchingInProgress: false,
-    });
-    notifyDelivery(io, delivery, 'search_timeout', {
-      deliveryId,
-      message: 'We could not find a driver for this delivery. Please try again.',
-    });
-    return;
-  }
+    const searchElapsedMs = Date.now() - new Date(delivery.searchStartedAt).getTime();
+    if (searchElapsedMs > MAX_SEARCH_DURATION_MS) {
+      await Delivery.findByIdAndUpdate(deliveryId, { status: 'no_driver_found' });
+      notifyDelivery(io, delivery, 'search_timeout', {
+        deliveryId,
+        message: 'We could not find a driver for this delivery. Please try again.',
+      });
+      return;
+    }
 
-  const [lng, lat] = [
-    delivery.pickupAddress.coordinates.lng,
-    delivery.pickupAddress.coordinates.lat,
-  ];
+    const [lng, lat] = [
+      delivery.pickupAddress.coordinates.lng,
+      delivery.pickupAddress.coordinates.lat,
+    ];
 
-  // ── Vehicle filter ────────────────────────────────────────────────
-  // Truck bookings (house loads) only go to truck drivers.
-  // Everything else only goes to bike drivers.
-  const vehicleFilter = delivery.rideType === 'truck'
-    ? { 'vehicle.type': 'truck' }
-    : { 'vehicle.type': 'bike' };
+    // ── Vehicle filter ────────────────────────────────────────────────
+    // Truck bookings (house loads) only go to truck drivers.
+    // Everything else only goes to bike drivers.
+    const vehicleFilter = delivery.rideType === 'truck'
+      ? { 'vehicle.type': 'truck' }
+      : { 'vehicle.type': 'bike' };
 
-  const candidates = await Driver.find({
-    status: 'online',
-    socketId: { $ne: null },
-    ...vehicleFilter,
-    location: {
-      $near: {
-        $geometry: { type: 'Point', coordinates: [lng, lat] },
-        $maxDistance: SEARCH_RADIUS_METERS,
+    const candidates = await Driver.find({
+      status: 'online',
+      socketId: { $ne: null },
+      ...vehicleFilter,
+      location: {
+        $near: {
+          $geometry: { type: 'Point', coordinates: [lng, lat] },
+          $maxDistance: SEARCH_RADIUS_METERS,
+        },
       },
-    },
-  }).limit(MAX_CANDIDATES);
+    }).limit(MAX_CANDIDATES);
 
-  console.log(
-    `[matchDriver] Delivery ${deliveryId} — rideType: ${delivery.rideType ?? 'standard'} — found ${candidates.length} ${delivery.rideType === 'truck' ? 'truck' : 'bike'} drivers`
-  );
+    console.log(
+      `[matchDriver] Delivery ${deliveryId} — rideType: ${delivery.rideType ?? 'standard'} — found ${candidates.length} ${delivery.rideType === 'truck' ? 'truck' : 'bike'} drivers`
+    );
 
-  if (candidates.length === 0) {
-    // Keep as finding_driver, not cancelled — user can retry, and
-    // matchWaitingDeliveryForDriver will pick this up automatically when
-    // a compatible driver next comes online.
-    await Delivery.findByIdAndUpdate(deliveryId, {
-      status: 'finding_driver',
-      matchingInProgress: false,
-    });
+    if (candidates.length === 0) {
+      // Keep as finding_driver, not cancelled — user can retry, and
+      // matchWaitingDeliveryForDriver will pick this up automatically when
+      // a compatible driver next comes online.
+      notifyDelivery(io, delivery, 'no_drivers_available', {
+        deliveryId,
+        canRetry: true,
+        message: delivery.rideType === 'truck'
+          ? 'No truck drivers available nearby. Tap to search again.'
+          : 'No drivers available nearby. Tap to search again.',
+      });
+      return;
+    }
 
-    notifyDelivery(io, delivery, 'no_drivers_available', {
-      deliveryId,
-      canRetry: true,
-      message: delivery.rideType === 'truck'
-        ? 'No truck drivers available nearby. Tap to search again.'
-        : 'No drivers available nearby. Tap to search again.',
-    });
-    return;
+    await offerToNext(delivery, candidates, 0, io);
+  } catch (err) {
+    console.error(`[matchDriver] unexpected error for delivery ${deliveryId}:`, err);
+  } finally {
+    await Delivery.findByIdAndUpdate(deliveryId, { matchingInProgress: false }).catch((err) =>
+      console.error(`[matchDriver] failed to release matchingInProgress for ${deliveryId}:`, err)
+    );
   }
-
-  await offerToNext(delivery, candidates, 0, io);
-  await Delivery.findByIdAndUpdate(deliveryId, { matchingInProgress: false }).catch(() => {});
 };
 
 
 /**
  * Called whenever a driver comes online — finds the single oldest delivery
  * still stuck in finding_driver that this driver is a fit for (right
- * vehicle type, within radius) and re-runs matching for it. This is what
- * closes the gap where a delivery created before any driver was online
- * would otherwise never see a driver who logs on afterward.
+ * vehicle type, within radius) and re-runs matching for it.
  */
 const matchWaitingDeliveryForDriver = async (driverId, io) => {
   const driver = await Driver.findById(driverId);
@@ -128,8 +130,6 @@ const matchWaitingDeliveryForDriver = async (driverId, io) => {
 
   if (!waitingDelivery) return;
 
-  // Rough haversine check since Delivery.pickupAddress isn't geo-indexed —
-  // this is a quick filter, not a precision distance calc.
   const pickupLat = waitingDelivery.pickupAddress?.coordinates?.lat;
   const pickupLng = waitingDelivery.pickupAddress?.coordinates?.lng;
   if (pickupLat == null || pickupLng == null) return;
@@ -165,9 +165,6 @@ const offerToNext = (delivery, candidates, index, io) => {
     if (index >= candidates.length) {
       const fresh = await Delivery.findById(delivery._id);
       if (fresh && fresh.status !== 'finding_driver') return resolve();
-
-      // Keep as finding_driver so user can retry — don't cancel
-      await Delivery.findByIdAndUpdate(delivery._id, { status: 'finding_driver' });
 
       notifyDelivery(io, delivery, 'no_drivers_available', {
         deliveryId: delivery._id,
@@ -205,7 +202,9 @@ const offerToNext = (delivery, candidates, index, io) => {
       timeoutSeconds: OFFER_TIMEOUT_MS / 1000,
     });
 
-    // Notify user we found a candidate
+    // Notify user we found a candidate — this is what should clear any
+    // "no drivers found" banner on the frontend, since a real offer is
+    // now in flight.
     notifyDelivery(io, delivery, 'connecting_to_driver', {
       deliveryId: delivery._id,
       attempt: index + 1,
@@ -218,7 +217,6 @@ const offerToNext = (delivery, candidates, index, io) => {
       if (settled) return;
       settled = true;
 
-      // Remove the listener so it doesn't fire after we've moved on
       driverSocket.removeAllListeners(`trip_response_${delivery._id}`);
 
       console.log(`[offerToNext] Driver ${driver._id} timed out — trying next`);
@@ -253,8 +251,6 @@ const offerToNext = (delivery, candidates, index, io) => {
 
 /**
  * Called when a driver accepts
- * Works whether user is on finding-driver screen or has navigated away —
- * user home screen will detect driver_assigned status via checkActiveDelivery
  */
 const handleAccepted = async (delivery, driver, io) => {
   const pickupCode = Math.floor(1000 + Math.random() * 9000).toString();
@@ -264,7 +260,6 @@ const handleAccepted = async (delivery, driver, io) => {
     status: 'driver_assigned',
     driver: driver._id,
     pickupCode,
-    matchingInProgress: false,
     'timeline.driverAssignedAt': new Date(),
   });
 
@@ -272,8 +267,6 @@ const handleAccepted = async (delivery, driver, io) => {
     ? { lat: driver.location.coordinates[1], lng: driver.location.coordinates[0] }
     : null;
 
-  // Notify user — works even if they navigated away since home screen
-  // polls checkActiveDelivery on focus and will show a "Driver Found!" alert
   notifyDelivery(io, delivery, 'driver_assigned', {
     deliveryId: delivery._id,
     driver: {
@@ -289,7 +282,6 @@ const handleAccepted = async (delivery, driver, io) => {
     driverLocation,
   });
 
-  // Confirm to driver
   io.to(driver.socketId).emit('trip_confirmed', {
     deliveryId: delivery._id,
     pickup: delivery.pickupAddress,
