@@ -7,6 +7,21 @@ const { calculateAllFares, calculateFare } = require('../services/pricingService
 const { RIDE_TYPES } = require('../config/rideTypes');
 const { nanoid } = require('nanoid');
 
+// Lagos-only cap — interstate delivery isn't live yet. Enforced server-side
+// (not just in the app UI) using a padded bounding box around Lagos State,
+// since a client-side-only cap can be bypassed by anyone hitting the API
+// directly.
+const LAGOS_BOUNDS = { minLat: 6.30, maxLat: 6.75, minLng: 2.65, maxLng: 4.35 };
+const isWithinLagos = (coords) => {
+  const lat = coords?.lat;
+  const lng = coords?.lng;
+  if (typeof lat !== 'number' || typeof lng !== 'number') return false;
+  return (
+    lat >= LAGOS_BOUNDS.minLat && lat <= LAGOS_BOUNDS.maxLat &&
+    lng >= LAGOS_BOUNDS.minLng && lng <= LAGOS_BOUNDS.maxLng
+  );
+};
+
 // POST /api/deliveries/initiate
 exports.initiateDelivery = async (req, res) => {
   try {
@@ -37,6 +52,13 @@ exports.initiateDelivery = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'You must agree to the insurance policy',
+      });
+    }
+
+    if (!isWithinLagos(pickupAddress?.coordinates) || !isWithinLagos(recipientAddress?.coordinates)) {
+      return res.status(400).json({
+        success: false,
+        message: 'We currently only deliver within Lagos. Interstate delivery is coming soon.',
       });
     }
 

@@ -75,9 +75,9 @@ const deliverySchema = new mongoose.Schema(
       required: true,
     },
 
-    // Estimated package weight in kg — drives weightFee in pricingService
-    // and filters which ride types are even offered (see maxWeightKg in
-    // config/rideTypes.js). Defaults to 1kg if never set.
+    // Actual package weight in kg, entered by the user — drives weightFee
+    // in pricingService and filters which ride types are even offered (see
+    // maxWeightKg in config/rideTypes.js). Defaults to 1kg if never set.
     weightKg: {
       type: Number,
       default: 1,
