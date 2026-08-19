@@ -21,6 +21,12 @@ const isWithinLagos = (coords) => {
   );
 };
 
+// Scheduled deliveries need enough lead time for the sweep to have a
+// meaningful window to work with, and to stop someone "scheduling" a
+// pickup for 90 seconds from now as a backdoor around the normal
+// immediate-search flow.
+const MIN_SCHEDULE_LEAD_MINUTES = 20;
+
 // POST /api/deliveries/initiate
 exports.initiateDelivery = async (req, res) => {
   try {
@@ -32,6 +38,7 @@ exports.initiateDelivery = async (req, res) => {
       packageType,
       weightKg,
       agreedToInsurance,
+      scheduledFor,
     } = req.body;
 
     if (
@@ -61,6 +68,18 @@ exports.initiateDelivery = async (req, res) => {
       });
     }
 
+    let scheduledForDate = null;
+    if (scheduledFor) {
+      scheduledForDate = new Date(scheduledFor);
+      const minAllowed = Date.now() + MIN_SCHEDULE_LEAD_MINUTES * 60 * 1000;
+      if (isNaN(scheduledForDate.getTime()) || scheduledForDate.getTime() < minAllowed) {
+        return res.status(400).json({
+          success: false,
+          message: `Scheduled time must be at least ${MIN_SCHEDULE_LEAD_MINUTES} minutes from now.`,
+        });
+      }
+    }
+
     const delivery = await Delivery.create({
       user: req.user._id,
       pickupAddress,
@@ -72,6 +91,7 @@ exports.initiateDelivery = async (req, res) => {
       packageType,
       weightKg: weightKg ? parseFloat(weightKg) : 1,
       agreedToInsurance,
+      scheduledFor: scheduledForDate,
       trackingToken: nanoid(10),
     });
 
@@ -301,14 +321,15 @@ exports.confirmPickup = async (req, res) => {
       });
     }
 
-    // Debit wallet — payment happens here, at pickup confirmation.
-    // Deliberately does NOT flip status to finding_driver or call
-    // matchDriver: that's start-search's job, called by finding-driver.tsx
-    // once it has actually mounted and is listening for a driver_assigned
-    // event. This used to also trigger matchDriver right here, which meant
-    // a driver could be matched and accept the trip before the user's app
-    // had even navigated to the screen that shows it happening — the exact
-    // race start-search's own design was meant to prevent. Leaving status
+    // Debit wallet — payment happens here, at pickup confirmation, whether
+    // the trip starts now or is scheduled for later. Deliberately does NOT
+    // flip status to finding_driver or call matchDriver: that's
+    // start-search's job, called by finding-driver.tsx once it has
+    // actually mounted and is listening for a driver_assigned event. This
+    // used to also trigger matchDriver right here, which meant a driver
+    // could be matched and accept the trip before the user's app had even
+    // navigated to the screen that shows it happening — the exact race
+    // start-search's own design was meant to prevent. Leaving status
     // untouched (still ride_selected) means start-search does the one and
     // only transition to finding_driver.
     try {
@@ -325,9 +346,29 @@ exports.confirmPickup = async (req, res) => {
       });
     }
 
+    // Scheduled trip: don't send the user to finding-driver.tsx at all —
+    // there's nothing to search for yet. Park it in 'scheduled' and let
+    // scheduledDeliveryService's sweep flip it to finding_driver (and
+    // actually call matchDriver) once scheduledFor arrives.
+    const isFutureSchedule = delivery.scheduledFor && delivery.scheduledFor.getTime() > Date.now();
+    if (isFutureSchedule) {
+      const updated = await Delivery.findByIdAndUpdate(
+        delivery._id,
+        { status: 'scheduled' },
+        { new: true }
+      );
+      return res.status(200).json({
+        success: true,
+        message: 'Payment confirmed — your delivery is scheduled.',
+        scheduled: true,
+        data: updated,
+      });
+    }
+
     res.status(200).json({
       success: true,
       message: 'Payment confirmed — finding you a driver...',
+      scheduled: false,
       data: delivery,
     });
   } catch (err) {
@@ -446,7 +487,7 @@ exports.getActiveDelivery = async (req, res) => {
     const delivery = await Delivery.findOne({
       user: req.user._id,
       status: {
-        $in: ['finding_driver', 'driver_assigned', 'driver_arrived', 'in_transit'],
+        $in: ['scheduled', 'finding_driver', 'driver_assigned', 'driver_arrived', 'in_transit'],
       },
     }).sort({ createdAt: -1 });
 

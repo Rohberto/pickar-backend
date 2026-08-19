@@ -88,6 +88,17 @@ const deliverySchema = new mongoose.Schema(
       enum: ['truck', 'standard', 'eco_send', 'express'],
     },
 
+    // When set (by the user picking "Schedule" instead of "Send now" on
+    // send-package/move-loads), the driver search is deliberately deferred
+    // until this time instead of starting right after confirm-pickup —
+    // see scheduledDeliveryService.js, which sweeps for deliveries whose
+    // time has arrived and kicks off matchDriver() for them then. Null for
+    // every normal, immediate delivery.
+    scheduledFor: {
+      type: Date,
+      default: null,
+    },
+
     price: {
       type: Number,
       default: 0,
@@ -127,6 +138,7 @@ const deliverySchema = new mongoose.Schema(
       enum: [
         'pending',
         'pending_payment', // business batch orders start here until billing is wired up
+        'scheduled',       // paid + waiting for scheduledFor to arrive — see scheduledDeliveryService.js
         'finding_driver',
             'ride_selected',   
         'no_driver_found',  // overall search window elapsed with no match — terminal until user retries

@@ -47,6 +47,10 @@ const io = new Server(server, {
 app.set('io', io);
 initSocket(io);
 
+// Polls for scheduled deliveries whose pickup time has arrived and starts
+// the driver search for them — see scheduledDeliveryService.js.
+require('./src/services/scheduledDeliveryService').startScheduledDeliverySweep(io);
+
 // ── Database ──────────────────────────────────────────────────────
 connectDB();
 
