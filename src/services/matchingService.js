@@ -1,6 +1,7 @@
 const Driver = require('../models/driver');
 const Delivery = require('../models/Delivery');
 const { notifyDelivery } = require('../utils/notifyDelivery');
+const { RIDE_TYPES } = require('../config/rideTypes');
 
 // Realistic per-vehicle search radius — bikes/mopeds can't reasonably be
 // offered a pickup 50km away (that was a leftover debug value); trucks can
@@ -11,6 +12,24 @@ const SEARCH_RADIUS_METERS_BY_VEHICLE = {
 };
 const searchRadiusFor = (rideType) =>
   rideType === 'truck' ? SEARCH_RADIUS_METERS_BY_VEHICLE.truck : SEARCH_RADIUS_METERS_BY_VEHICLE.bike;
+
+const vehicleClassFor = (rideType) =>
+  RIDE_TYPES.find((r) => r.type === rideType)?.vehicleClass || 'bike';
+
+// Drivers now register under one specific ride type (standard/eco_send/
+// express/truck — see driverController.updateMe) and only get offered
+// deliveries of that exact type. Drivers created before this existed have
+// no rideType stored (null) — those fall back to the old bike-vs-truck-only
+// distinction via vehicle.type so they keep working until they re-register.
+const candidateFilterFor = (rideType) => {
+  const normalizedType = rideType || 'standard';
+  return {
+    $or: [
+      { rideType: normalizedType },
+      { rideType: null, 'vehicle.type': vehicleClassFor(normalizedType) },
+    ],
+  };
+};
 
 const OFFER_TIMEOUT_MS = 15000;     // 15 seconds per driver — was 30s, which let
                                      // a single full offer round (5 candidates)
@@ -80,17 +99,13 @@ const matchDriver = async (deliveryId, io) => {
       delivery.pickupAddress.coordinates.lat,
     ];
 
-    // ── Vehicle filter ────────────────────────────────────────────────
-    // Truck bookings (house loads) only go to truck drivers.
-    // Everything else only goes to bike drivers.
-    const vehicleFilter = delivery.rideType === 'truck'
-      ? { 'vehicle.type': 'truck' }
-      : { 'vehicle.type': 'bike' };
-
+    // ── Ride type filter ────────────────────────────────────────────────
+    // Only offered to drivers registered for this exact ride type (with a
+    // legacy bike/truck fallback for drivers who haven't re-registered).
     const candidates = await Driver.find({
       status: 'online',
       socketId: { $ne: null },
-      ...vehicleFilter,
+      ...candidateFilterFor(delivery.rideType),
       location: {
         $near: {
           $geometry: { type: 'Point', coordinates: [lng, lat] },
@@ -100,7 +115,7 @@ const matchDriver = async (deliveryId, io) => {
     }).limit(MAX_CANDIDATES);
 
     console.log(
-      `[matchDriver] Delivery ${deliveryId} — rideType: ${delivery.rideType ?? 'standard'} — found ${candidates.length} ${delivery.rideType === 'truck' ? 'truck' : 'bike'} drivers`
+      `[matchDriver] Delivery ${deliveryId} — rideType: ${delivery.rideType ?? 'standard'} — found ${candidates.length} matching driver(s)`
     );
 
     if (candidates.length === 0) {
@@ -167,8 +182,13 @@ const matchWaitingDeliveryForDriver = async (driverId, io) => {
   if (!driver || !driver.location?.coordinates) return;
 
   const [lng, lat] = driver.location.coordinates;
-  const vehicleType = driver.vehicle?.type; // 'bike' | 'truck'
-  const rideTypeFilter = vehicleType === 'truck' ? 'truck' : { $ne: 'truck' };
+
+  // Driver registered under a specific ride type → only look for waiting
+  // deliveries of that exact type. Legacy driver with no rideType stored
+  // yet → fall back to the old bike/truck-only distinction.
+  const rideTypeFilter = driver.rideType
+    ? driver.rideType
+    : driver.vehicle?.type === 'truck' ? 'truck' : { $ne: 'truck' };
 
   const waitingDelivery = await Delivery.findOne({
     status: 'finding_driver',
@@ -342,4 +362,4 @@ const handleAccepted = async (delivery, driver, io) => {
 };
 
 
-module.exports = { matchDriver, matchWaitingDeliveryForDriver };
+module.exports = { matchDriver, matchWaitingDeliveryForDriver, candidateFilterFor };

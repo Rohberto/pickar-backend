@@ -1159,3 +1159,48 @@ exports.migrateRatings = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+/**
+ * super_admin only — recomputes every driver's rating.average/count from
+ * their actual Rating documents (not from the old placeholder number).
+ * Needed one-time after fixing the Driver.rating schema (was declared as
+ * a plain Number while every write path treated it as { average, count }
+ * — real submitted ratings were being silently dropped, so drivers with
+ * genuine trip ratings could still be showing the 5.0 default). Safe to
+ * re-run any time; every ongoing rating submission already keeps this in
+ * sync on its own (see ratingControllers.rateDelivery), this just backfills
+ * drivers whose true average never got a chance to be written.
+ */
+exports.recalculateDriverRatings = async (req, res) => {
+  try {
+    const Rating = require('../models/Rating');
+
+    const drivers = await Driver.find({}, '_id');
+    let updated = 0;
+
+    for (const driver of drivers) {
+      const ratings = await Rating.find({ driver: driver._id });
+      const count = ratings.length;
+      const average = count > 0
+        ? Math.round((ratings.reduce((sum, r) => sum + r.rating, 0) / count) * 10) / 10
+        : 5.0;
+
+      await Driver.findByIdAndUpdate(driver._id, {
+        'rating.average': average,
+        'rating.count': count,
+      });
+      updated++;
+    }
+
+    console.log(`[Migration] recalculateDriverRatings — recomputed ${updated} driver(s) by admin ${req.admin.email}`);
+
+    res.json({
+      success: true,
+      message: `Recalculated ratings for ${updated} driver(s) from their actual trip ratings.`,
+      updated,
+    });
+  } catch (err) {
+    console.error('recalculateDriverRatings error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};

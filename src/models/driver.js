@@ -12,7 +12,29 @@ const driverSchema = new mongoose.Schema(
       type: { type: String, enum: ['bike', 'truck']},
       plateNumber: { type: String },
     },
-    rating: { type: Number, default: 5.0 },
+
+    // The specific ride type (see config/rideTypes.js) this driver
+    // registered under — Standard / Eco Send / Express / Truck. Chosen
+    // once at vehicle setup and locked from then on (enforced in
+    // driverController.updateMe, not just hidden in the UI); vehicle.type
+    // (bike/truck) is derived from it automatically and drives matching
+    // the same way it always has.
+    rideType: {
+      type: String,
+      enum: ['standard', 'eco_send', 'express', 'truck'],
+      default: null,
+    },
+    // NOTE: this used to be a plain Number. ratingControllers.js (and the
+    // admin/account/home screens) have always read/written it as
+    // { average, count } — the schema just never caught up, so every
+    // `Driver.findByIdAndUpdate(id, { 'rating.average': x, 'rating.count': y })`
+    // after a real rating was silently dropped by Mongoose strict mode,
+    // and every screen kept showing the default. Declaring it properly
+    // here is what actually makes real ratings show up.
+    rating: {
+      average: { type: Number, default: 5.0 },
+      count: { type: Number, default: 0 },
+    },
     nationality: { type: String, default: null },
     stateOfOrigin: { type: String, default: null },
     residentialAddress: { type: String, default: null },

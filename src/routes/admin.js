@@ -42,5 +42,6 @@ router.patch('/payments/withdrawals/:id/reject', ctrl.rejectWithdrawal);
 
 // ─── Migrations (super_admin only) ───────────────────────────────────────────
 router.post('/migrations/ratings', restrictTo('super_admin'), ctrl.migrateRatings);
+router.post('/migrations/recalculate-ratings', restrictTo('super_admin'), ctrl.recalculateDriverRatings);
 
 module.exports = router;

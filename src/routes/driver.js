@@ -9,6 +9,7 @@ const {
   getDriverProfile,
   getActiveTrip,
   getActiveTrips,
+  getRideHistory,
   updateMe
 } = require('../controllers/driverController');
 const {
@@ -43,6 +44,9 @@ router.get('/active-trips', getActiveTrips); // plural — returns all
 // GET /api/drivers/active-trip
 // Returns the current in-progress delivery assigned to this driver
 router.get('/active-trip', getActiveTrip);
+
+// GET /api/drivers/rides — trip history for the "Rides" tab
+router.get('/rides', getRideHistory);
 
 router.get('/earnings', protect, getEarnings);
 router.get('/banks', protect, getBankList);
