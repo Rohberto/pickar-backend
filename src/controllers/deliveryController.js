@@ -1,5 +1,4 @@
 const Delivery = require('../models/Delivery');
-const { matchDriver } = require('../services/matchingService');
 const { debitWallet } = require('../services/walletService');
 const { releaseEscrowToDriver, refundEscrow } = require('../services/walletService');
 const { notifyDelivery } = require('../utils/notifyDelivery');
@@ -302,7 +301,16 @@ exports.confirmPickup = async (req, res) => {
       });
     }
 
-    // Debit wallet before matching a driver
+    // Debit wallet — payment happens here, at pickup confirmation.
+    // Deliberately does NOT flip status to finding_driver or call
+    // matchDriver: that's start-search's job, called by finding-driver.tsx
+    // once it has actually mounted and is listening for a driver_assigned
+    // event. This used to also trigger matchDriver right here, which meant
+    // a driver could be matched and accept the trip before the user's app
+    // had even navigated to the screen that shows it happening — the exact
+    // race start-search's own design was meant to prevent. Leaving status
+    // untouched (still ride_selected) means start-search does the one and
+    // only transition to finding_driver.
     try {
       await debitWallet({
         userId: req.user._id,
@@ -317,17 +325,9 @@ exports.confirmPickup = async (req, res) => {
       });
     }
 
-    // Update status after successful payment
-    delivery.status = 'finding_driver';
-    await delivery.save();
-
-    // Kick off driver matching
-    const io = req.app.get('io');
-    matchDriver(delivery._id, io);
-
     res.status(200).json({
       success: true,
-      message: 'Searching for a driver for you...',
+      message: 'Payment confirmed — finding you a driver...',
       data: delivery,
     });
   } catch (err) {

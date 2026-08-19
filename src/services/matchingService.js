@@ -2,8 +2,19 @@ const Driver = require('../models/driver');
 const Delivery = require('../models/Delivery');
 const { notifyDelivery } = require('../utils/notifyDelivery');
 
-const SEARCH_RADIUS_METERS = 50000; // 50km for testing — reduce to 5000 for production
-const OFFER_TIMEOUT_MS = 30000;     // 30 seconds per driver
+// Realistic per-vehicle search radius — bikes/mopeds can't reasonably be
+// offered a pickup 50km away (that was a leftover debug value); trucks can
+// cover more ground so get a wider net.
+const SEARCH_RADIUS_METERS_BY_VEHICLE = {
+  bike: 8000,
+  truck: 20000,
+};
+const searchRadiusFor = (rideType) =>
+  rideType === 'truck' ? SEARCH_RADIUS_METERS_BY_VEHICLE.truck : SEARCH_RADIUS_METERS_BY_VEHICLE.bike;
+
+const OFFER_TIMEOUT_MS = 15000;     // 15 seconds per driver — was 30s, which let
+                                     // a single full offer round (5 candidates)
+                                     // burn 2.5 of the 3-minute search budget.
 const MAX_CANDIDATES = 5;
 const MAX_SEARCH_DURATION_MS = 3 * 60 * 1000; // give up for good after 3 minutes total
 
@@ -44,6 +55,14 @@ const matchDriver = async (deliveryId, io) => {
     if (!delivery.searchStartedAt) {
       delivery.searchStartedAt = new Date();
       await Delivery.findByIdAndUpdate(deliveryId, { searchStartedAt: delivery.searchStartedAt });
+
+      // Proactively give up after MAX_SEARCH_DURATION_MS instead of only
+      // checking the clock the next time something happens to call
+      // matchDriver again (a retry, or a driver coming online). Without
+      // this, a delivery with no further trigger could sit in
+      // "finding_driver" forever — never actually failing, just silently
+      // stuck — since nothing else was watching the clock.
+      scheduleSearchTimeout(deliveryId, io);
     }
 
     const searchElapsedMs = Date.now() - new Date(delivery.searchStartedAt).getTime();
@@ -75,7 +94,7 @@ const matchDriver = async (deliveryId, io) => {
       location: {
         $near: {
           $geometry: { type: 'Point', coordinates: [lng, lat] },
-          $maxDistance: SEARCH_RADIUS_METERS,
+          $maxDistance: searchRadiusFor(delivery.rideType),
         },
       },
     }).limit(MAX_CANDIDATES);
@@ -108,6 +127,35 @@ const matchDriver = async (deliveryId, io) => {
   }
 };
 
+/**
+ * Fires once, MAX_SEARCH_DURATION_MS after a delivery's search clock
+ * started. If the delivery is still sitting in finding_driver at that
+ * point (no driver accepted, nothing else re-triggered a resolution), it's
+ * flipped to no_driver_found and the user is notified — instead of relying
+ * on some future retry/driver-online event to happen to notice the clock
+ * ran out. In-process timer, so a server restart clears it; matchDriver's
+ * own lazy check at the top still catches those on the next trigger, so
+ * this is a proactive improvement layered on top of that, not a
+ * replacement for it.
+ */
+const scheduleSearchTimeout = (deliveryId, io) => {
+  setTimeout(async () => {
+    try {
+      const delivery = await Delivery.findById(deliveryId);
+      if (!delivery || delivery.status !== 'finding_driver') return; // already resolved
+
+      await Delivery.findByIdAndUpdate(deliveryId, { status: 'no_driver_found' });
+      notifyDelivery(io, delivery, 'search_timeout', {
+        deliveryId,
+        message: 'We could not find a driver for this delivery. Please try again.',
+      });
+      console.log(`[scheduleSearchTimeout] Delivery ${deliveryId} auto-timed-out after ${MAX_SEARCH_DURATION_MS}ms`);
+    } catch (err) {
+      console.error(`[scheduleSearchTimeout] error for ${deliveryId}:`, err);
+    }
+  }, MAX_SEARCH_DURATION_MS);
+};
+
 
 /**
  * Called whenever a driver comes online — finds the single oldest delivery
@@ -135,7 +183,7 @@ const matchWaitingDeliveryForDriver = async (driverId, io) => {
   if (pickupLat == null || pickupLng == null) return;
 
   const distanceMeters = haversineMeters(lat, lng, pickupLat, pickupLng);
-  if (distanceMeters > SEARCH_RADIUS_METERS) return;
+  if (distanceMeters > searchRadiusFor(waitingDelivery.rideType)) return;
 
   console.log(
     `[matchWaitingDeliveryForDriver] Driver ${driverId} online — retrying match for waiting delivery ${waitingDelivery._id}`
