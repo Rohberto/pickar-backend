@@ -3,12 +3,12 @@ const Delivery = require('../models/Delivery');
 const { notifyDelivery } = require('../utils/notifyDelivery');
 const { RIDE_TYPES } = require('../config/rideTypes');
 
-// Realistic per-vehicle search radius — bikes/mopeds can't reasonably be
-// offered a pickup 50km away (that was a leftover debug value); trucks can
-// cover more ground so get a wider net.
+// TEMP: widened to 100km for testing. Revert to bike:8000, truck:20000
+// before shipping — bikes/mopeds can't reasonably be offered a pickup
+// that far away in production.
 const SEARCH_RADIUS_METERS_BY_VEHICLE = {
-  bike: 8000,
-  truck: 20000,
+  bike: 100000,
+  truck: 100000,
 };
 const searchRadiusFor = (rideType) =>
   rideType === 'truck' ? SEARCH_RADIUS_METERS_BY_VEHICLE.truck : SEARCH_RADIUS_METERS_BY_VEHICLE.bike;
