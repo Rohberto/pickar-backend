@@ -5,6 +5,7 @@ const ChatMessage = require('../models/ChatMessage');
 const { Expo } = require('expo-server-sdk');
 const { notifyDelivery } = require('../utils/notifyDelivery');
 const { matchWaitingDeliveryForDriver } = require('../services/matchingService');
+const { releaseEscrowToDriver } = require('../services/walletService');
  
 const expoClient = new Expo();
  
@@ -65,6 +66,7 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
     // Driver comes online — saves socketId, GPS, status to DB.
     // lat & lng are REQUIRED so matchDriver's $near query can find them.
    socket.on('driver_online', async ({ driverId, lat, lng }) => {
+  try {
   const driver = await Driver.findById(driverId).populate('user', 'isApproved isSuspended');
 
   if (!driver || !driver.user?.isApproved || driver.user?.isSuspended) {
@@ -91,23 +93,30 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
   matchWaitingDeliveryForDriver(driverId, io).catch((err) =>
     console.error('[driver_online] matchWaitingDeliveryForDriver error:', err)
   );
+  } catch (err) {
+    console.error('[driver_online] error:', err);
+  }
 });
 
     // Driver goes offline — clear socketId so matchDriver skips them.
     socket.on('driver_offline', async ({ driverId }) => {
       if (!driverId) return;
-      await Driver.findByIdAndUpdate(driverId, {
-        status: 'offline',
-        socketId: null,
-      });
-      console.log(`Driver ${driverId} went offline`);
+      try {
+        await Driver.findByIdAndUpdate(driverId, {
+          status: 'offline',
+          socketId: null,
+        });
+        console.log(`Driver ${driverId} went offline`);
+      } catch (err) {
+        console.error('[driver_offline] error:', err);
+      }
     });
 
     // Driver sends live GPS updates while on a trip.
     // Broadcasts location to the user currently tracking them.
   socket.on('driver_location_update', async ({ driverId, lat, lng }) => {
       if (!driverId) return;
-
+      try {
       await Driver.findByIdAndUpdate(driverId, {
         location: { type: 'Point', coordinates: [lng, lat] },
       });
@@ -126,6 +135,9 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
           location: { lat, lng },
           deliveryId: delivery._id,
         });
+      }
+      } catch (err) {
+        console.error('[driver_location_update] error:', err);
       }
     });
     // ─────────────────────────────────────────────────────────────
@@ -148,20 +160,24 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
 
     // Driver marks package as picked up (after verifying pickup code).
     socket.on('mark_picked_up', async ({ deliveryId, deliveryCode }) => {
-      const delivery = await Delivery.findByIdAndUpdate(
-        deliveryId,
-        {
-          status: 'in_transit',
-          deliveryCode: deliveryCode || Math.floor(1000 + Math.random() * 9000).toString(),
-        },
-        { new: true }
-      );
-      if (delivery) {
-        notifyDelivery(io, delivery, 'package_picked_up', {
+      try {
+        const delivery = await Delivery.findByIdAndUpdate(
           deliveryId,
-          deliveryCode: delivery.deliveryCode,
-          pickupTime: new Date().toISOString(),
-        });
+          {
+            status: 'in_transit',
+            deliveryCode: deliveryCode || Math.floor(1000 + Math.random() * 9000).toString(),
+          },
+          { new: true }
+        );
+        if (delivery) {
+          notifyDelivery(io, delivery, 'package_picked_up', {
+            deliveryId,
+            deliveryCode: delivery.deliveryCode,
+            pickupTime: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        console.error('[mark_picked_up] error:', err);
       }
     });
 
@@ -169,20 +185,42 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
   socket.join(`driver_${driverId}`);
 });
 
-    // Driver marks delivery as complete.
+    // Driver marks delivery as complete. This path previously never
+    // released escrow to the driver at all (unlike the HTTP
+    // POST /deliveries/:id/delivered route, which does) — a driver whose
+    // app happened to use this socket event instead of the REST endpoint
+    // would complete a delivery and simply never get paid for it, with no
+    // error anywhere. Mirrors the same idempotency guard added to the
+    // HTTP route so a duplicate emit can't release escrow twice.
     socket.on('mark_delivered', async ({ deliveryId, driverId }) => {
-      const delivery = await Delivery.findByIdAndUpdate(
-        deliveryId,
-        { status: 'delivered' },
-        { new: true }
-      );
+      try {
+        const existing = await Delivery.findById(deliveryId);
+        if (!existing) return;
+        const alreadyDelivered = existing.status === 'delivered';
 
-      if (delivery) {
-        // Free up driver for next trip
-        if (driverId) {
-          await Driver.findByIdAndUpdate(driverId, { status: 'online' });
+        const delivery = await Delivery.findByIdAndUpdate(
+          deliveryId,
+          { status: 'delivered' },
+          { new: true }
+        );
+
+        if (delivery) {
+          if (!alreadyDelivered) {
+            await releaseEscrowToDriver({
+              userId: delivery.user,
+              driverId: delivery.driver || driverId,
+              amount: delivery.price,
+              deliveryId: delivery._id,
+            }).catch((err) => console.error('[mark_delivered] releaseEscrowToDriver error:', err));
+          }
+          // Free up driver for next trip
+          if (driverId) {
+            await Driver.findByIdAndUpdate(driverId, { status: 'online' });
+          }
+          notifyDelivery(io, delivery, 'package_delivered', { deliveryId });
         }
-        notifyDelivery(io, delivery, 'package_delivered', { deliveryId });
+      } catch (err) {
+        console.error('[mark_delivered] error:', err);
       }
     });
 
@@ -193,11 +231,15 @@ socket.on('join_delivery_room', ({ deliveryId }) => {
     // When a driver socket disconnects unexpectedly, mark them offline
     // so matchDriver doesn't try to offer them trips.
     socket.on('disconnect', async () => {
-      await Driver.findOneAndUpdate(
-        { socketId: socket.id },
-        { status: 'offline', socketId: null }
-      );
-      console.log(`Socket disconnected: ${socket.id}`);
+      try {
+        await Driver.findOneAndUpdate(
+          { socketId: socket.id },
+          { status: 'offline', socketId: null }
+        );
+        console.log(`Socket disconnected: ${socket.id}`);
+      } catch (err) {
+        console.error('[disconnect] error:', err);
+      }
     });
 
    // Join a delivery-specific chat room

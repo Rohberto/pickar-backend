@@ -141,7 +141,11 @@ exports.createBatchOrder = async (req, res) => {
     // Kick off matching for every order that has coordinates
     const io = req.app.get('io');
     const readyForMatching = created.filter((d) => d.status === 'finding_driver');
-    readyForMatching.forEach((delivery) => matchDriver(delivery._id, io));
+    readyForMatching.forEach((delivery) =>
+      matchDriver(delivery._id, io).catch((err) =>
+        console.error(`[createBatchOrder] matchDriver error for ${delivery._id}:`, err)
+      )
+    );
 
     const skippedCount = created.length - readyForMatching.length;
 

@@ -302,7 +302,11 @@ const offerToNext = (delivery, candidates, index, io) => {
       clearTimeout(timeout);
 
       if (accepted) {
-        await handleAccepted(delivery, driver, io);
+        try {
+          await handleAccepted(delivery, driver, io);
+        } catch (err) {
+          console.error(`[offerToNext] handleAccepted failed for delivery ${delivery._id}:`, err);
+        }
         resolve();
       } else {
         console.log(`[offerToNext] Driver ${driver._id} declined`);
@@ -324,12 +328,22 @@ const handleAccepted = async (delivery, driver, io) => {
   const pickupCode = Math.floor(1000 + Math.random() * 9000).toString();
 
   await Driver.findByIdAndUpdate(driver._id, { status: 'busy' });
-  await Delivery.findByIdAndUpdate(delivery._id, {
-    status: 'driver_assigned',
-    driver: driver._id,
-    pickupCode,
-    'timeline.driverAssignedAt': new Date(),
-  });
+  try {
+    await Delivery.findByIdAndUpdate(delivery._id, {
+      status: 'driver_assigned',
+      driver: driver._id,
+      pickupCode,
+      'timeline.driverAssignedAt': new Date(),
+    });
+  } catch (err) {
+    // The driver write above already succeeded — without this, a failure
+    // here leaves the driver stuck "busy" forever with no delivery
+    // actually assigned to them (no future matchDriver call would ever
+    // include them as a candidate again). Revert so they're immediately
+    // matchable again instead of silently lost from the pool.
+    await Driver.findByIdAndUpdate(driver._id, { status: 'online' }).catch(() => {});
+    throw err;
+  }
 
   const driverLocation = driver.location?.coordinates
     ? { lat: driver.location.coordinates[1], lng: driver.location.coordinates[0] }

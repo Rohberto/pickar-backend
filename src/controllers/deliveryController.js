@@ -273,17 +273,40 @@ exports.getDeliveryHistory = async (req, res) => {
 };
 
 
+// Statuses reached only after confirmPickup's debitWallet call has actually
+// moved money into escrow. Cancelling before any of these (still 'pending',
+// 'pending_payment', or 'ride_selected') means nothing was ever escrowed —
+// refunding anyway would credit the wallet with money that was never taken.
+const ESCROW_FUNDED_STATUSES = [
+  'scheduled', 'finding_driver', 'no_driver_found',
+  'driver_assigned', 'driver_arrived', 'picked_up', 'in_transit',
+];
+
 // POST /api/deliveries/:id/cancel
 exports.cancelDelivery = async (req, res) => {
   try {
-    // Remove the status restriction — allow cancel from any active state
+    // Read first so we know the PRE-cancel status (needed to decide whether
+    // escrow was ever funded) and so a bad id 404s cleanly instead of
+    // throwing when we try to read `.user`/`.price` off null. Previously
+    // this called findByIdAndUpdate then immediately read `delivery.user`
+    // on the line before the null-check even ran, throwing a TypeError on
+    // typos'd ids instead of a 404 — and refunded escrow unconditionally,
+    // which could credit a wallet for a delivery that was cancelled before
+    // payment was ever debited into escrow.
+    const existing = await Delivery.findById(req.params.id);
+    if (!existing) return res.status(404).json({ success: false });
+
+    const wasEscrowFunded = ESCROW_FUNDED_STATUSES.includes(existing.status);
+
     const delivery = await Delivery.findByIdAndUpdate(
       req.params.id,
       { status: 'cancelled' },
       { new: true }
     );
-await refundEscrow({ userId: delivery.user, amount: delivery.price, deliveryId: delivery._id });
-    if (!delivery) return res.status(404).json({ success: false });
+
+    if (wasEscrowFunded) {
+      await refundEscrow({ userId: delivery.user, amount: delivery.price, deliveryId: delivery._id });
+    }
 
     const io = req.app.get('io');
 
@@ -456,13 +479,24 @@ exports.verifyDeliveryCode = async (req, res) => {
 exports.markDelivered = async (req, res) => {
   try {
     const { driverId } = req.body;
+
+    // Read first: (a) avoids dereferencing `.user`/`.price` on null before
+    // the 404 check, same defect as cancelDelivery above, and (b) lets us
+    // tell whether this delivery was ALREADY delivered, so a duplicate
+    // call (retry, double-tap) can't release escrow to the driver twice.
+    const existing = await Delivery.findById(req.params.id);
+    if (!existing) return res.status(404).json({ success: false, message: 'Delivery not found' });
+    const alreadyDelivered = existing.status === 'delivered';
+
     const delivery = await Delivery.findByIdAndUpdate(
       req.params.id,
       { status: 'delivered' },
       { new: true }
     );
-await releaseEscrowToDriver({ userId: delivery.user, driverId: delivery.driver, amount: delivery.price, deliveryId: delivery._id });
-    if (!delivery) return res.status(404).json({ success: false, message: 'Delivery not found' });
+
+    if (!alreadyDelivered) {
+      await releaseEscrowToDriver({ userId: delivery.user, driverId: delivery.driver, amount: delivery.price, deliveryId: delivery._id });
+    }
 
     // Free up driver
     if (driverId) {

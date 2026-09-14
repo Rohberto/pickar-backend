@@ -8,8 +8,12 @@ router.get('/me', protect, getMe);
 router.patch('/me', protect, updateMe);
 router.delete('/me', protect, deleteMe);
 router.patch('/push-token', protect, async (req, res) => {
-  await User.findByIdAndUpdate(req.user._id, { pushToken: req.body.token });
-  res.json({ success: true });
+  try {
+    await User.findByIdAndUpdate(req.user._id, { pushToken: req.body.token });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 module.exports = router;
