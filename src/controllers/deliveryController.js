@@ -434,21 +434,28 @@ exports.verifyPickupCode = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid pickup code' });
     }
 
-    // Generate delivery code for recipient verification
-    const deliveryCode = Math.floor(1000 + Math.random() * 9000).toString();
+    // Idempotent: if this delivery was already verified (e.g. a retry after
+    // a flaky-network timeout on the driver's first successful call), reuse
+    // the existing deliveryCode instead of minting a new one — regenerating
+    // it here would silently invalidate the QR code already shown to the
+    // recipient, causing a legit QR scan to fail with "wrong code".
+    const alreadyVerified = !!delivery.deliveryCode;
+    const deliveryCode = delivery.deliveryCode || Math.floor(1000 + Math.random() * 9000).toString();
 
-    await Delivery.findByIdAndUpdate(req.params.id, {
-      status: 'in_transit',
-      deliveryCode,
-    });
+    if (!alreadyVerified) {
+      await Delivery.findByIdAndUpdate(req.params.id, {
+        status: 'in_transit',
+        deliveryCode,
+      });
 
-    // Notify user/business package has been picked up
-    const io = req.app.get('io');
-    notifyDelivery(io, delivery, 'package_picked_up', {
-      deliveryId: delivery._id,
-      deliveryCode,
-      pickupTime: new Date().toISOString(),
-    });
+      // Notify user/business package has been picked up
+      const io = req.app.get('io');
+      notifyDelivery(io, delivery, 'package_picked_up', {
+        deliveryId: delivery._id,
+        deliveryCode,
+        pickupTime: new Date().toISOString(),
+      });
+    }
 
     res.json({ success: true, data: { deliveryCode } });
   } catch (err) {
