@@ -2,6 +2,7 @@ const { getOrCreateWallet, creditWallet } = require('../services/walletService')
 const { initializeTopup, verifyTransaction, verifyWebhookSignature } = require('../services/paystackService');
 const Transaction = require('../models/Transaction');
 const User = require('../models/user');
+const { sendPushNotification } = require('../utils/sendPushNotification');
 
 // GET /api/wallet
 exports.getWallet = async (req, res) => {
@@ -70,6 +71,17 @@ exports.verifyTopup = async (req, res) => {
       paystackReference: reference,
     });
 
+    // Send as a real system push notification rather than relying on the
+    // in-app custom Alert — the Alert only fires while the user is
+    // actively looking at this screen (e.g. not if they backgrounded the
+    // app during the Paystack webview redirect).
+    sendPushNotification(
+      req.user.pushToken,
+      'Payment Successful 🎉',
+      `₦${verified.amountNaira.toLocaleString()} has been added to your wallet.`,
+      { type: 'wallet_topup' }
+    ).catch(() => {});
+
     res.json({
       success: true,
       message: `₦${verified.amountNaira.toLocaleString()} added to your wallet`,
@@ -108,6 +120,13 @@ exports.paystackWebhook = async (req, res) => {
         description: `Wallet top-up via ${data.channel}`,
         paystackReference: reference,
       });
+
+      sendPushNotification(
+        user.pushToken,
+        'Payment Successful 🎉',
+        `₦${(data.amount / 100).toLocaleString()} has been added to your wallet.`,
+        { type: 'wallet_topup' }
+      ).catch(() => {});
     }
 
     res.sendStatus(200);
